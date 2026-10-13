@@ -1,0 +1,9 @@
+/kinora-data/
+/kinora-server
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+/tmp/

@@ -1,0 +1,10 @@
+{{define "setup.html"}}{{template "top" .}}
+<h1>Welcome to Kinora</h1>
+<p class="quiet">Create the admin account for this server. You'll use it to add libraries and sign in from the apps.</p>
+<form class="card" method="post" action="/setup" style="max-width: 420px">
+  <p><label for="username">Username</label><input id="username" name="username" autocomplete="username" required></p>
+  <p><label for="password">Password (at least 8 characters)</label><input id="password" name="password" type="password" autocomplete="new-password" required></p>
+  <p><label for="confirm">Confirm password</label><input id="confirm" name="confirm" type="password" autocomplete="new-password" required></p>
+  <button class="primary">Create admin account</button>
+</form>
+{{template "bottom"}}{{end}}

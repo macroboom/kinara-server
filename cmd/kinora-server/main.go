@@ -1,0 +1,546 @@
+// Command kinora-server runs the Kinora media server.
+//
+//	kinora-server [serve]           run the server (default)
+//	kinora-server user add          create a user
+//	kinora-server user passwd       change a password
+//	kinora-server library add       add a library folder
+//	kinora-server library list      list libraries
+//	kinora-server scan              scan libraries now and wait
+//
+// Settings come from flags or environment variables:
+//
+//	-data     KINORA_DATA      data folder (database, image cache)   ./kinora-data
+//	-listen   KINORA_LISTEN    address to listen on                  :8420
+//	-tmdb-key KINORA_TMDB_KEY  TMDB API key or read access token
+//	-ffprobe  KINORA_FFPROBE   path to ffprobe                       ffprobe on PATH
+//	-ffmpeg   KINORA_FFMPEG    path to ffmpeg                        next to ffprobe, or on PATH
+//
+// Background features (on unless set to 0 or off):
+//
+//	KINORA_TRANSCODE   convert files the TV can't play
+//	KINORA_TRICKPLAY   preview thumbnails for skipping (about 5 MB per movie)
+//	KINORA_INTROS      find TV intros for "Skip intro"
+//	KINORA_WATCH       seconds between checks of library folders for new files (default 60)
+package main
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"kinora/internal/api"
+	"kinora/internal/auth"
+	"kinora/internal/ffmpeg"
+	"kinora/internal/images"
+	"kinora/internal/jobs"
+	"kinora/internal/match"
+	"kinora/internal/probe"
+	"kinora/internal/scanner"
+	"kinora/internal/store"
+	"kinora/internal/tmdb"
+	"kinora/internal/transcode"
+	"kinora/internal/trickplay"
+	"kinora/internal/watch"
+	"kinora/internal/watcher"
+)
+
+const version = "0.1.0-dev"
+
+type config struct {
+	dataDir string
+	listen  string
+	tmdbKey string
+	ffprobe string
+	ffmpeg  string
+	debug   bool
+	rescan  time.Duration
+	workers int
+}
+
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func commonFlags(fs *flag.FlagSet, c *config) {
+	fs.StringVar(&c.dataDir, "data", env("KINORA_DATA", "./kinora-data"), "data folder")
+	fs.StringVar(&c.tmdbKey, "tmdb-key", env("KINORA_TMDB_KEY", ""), "TMDB API key or read access token")
+	fs.StringVar(&c.ffprobe, "ffprobe", env("KINORA_FFPROBE", ""), "path to ffprobe")
+	fs.StringVar(&c.ffmpeg, "ffmpeg", env("KINORA_FFMPEG", ""), "path to ffmpeg (default: next to ffprobe, or on PATH)")
+	fs.BoolVar(&c.debug, "debug", false, "verbose logging")
+	workers, _ := strconv.Atoi(env("KINORA_SCAN_WORKERS", "0"))
+	fs.IntVar(&c.workers, "scan-workers", workers, "files probed at once (0 = pick by drive type: SSD up to 8, hard drive 2)")
+}
+
+func main() {
+	envFile := env("KINORA_ENV_FILE", ".env")
+	if err := loadDotEnv(envFile); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	args := os.Args[1:]
+	cmd := "serve"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		cmd, args = args[0], args[1:]
+	}
+	var err error
+	switch cmd {
+	case "serve":
+		err = serve(args)
+	case "user":
+		err = userCmd(args)
+	case "library":
+		err = libraryCmd(args)
+	case "scan":
+		err = scanCmd(args)
+	case "version":
+		fmt.Println(version)
+	case "help", "-h", "--help":
+		fmt.Println(usage)
+	default:
+		err = fmt.Errorf("unknown command %q\n\n%s", cmd, usage)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}
+
+const usage = `Usage:
+  kinora-server [serve] [-listen :8420] [-data DIR] [-tmdb-key KEY]
+  kinora-server user add -username NAME [-password PASS] [-admin]
+  kinora-server user passwd -username NAME [-password PASS]
+  kinora-server library add -kind movies|tv [-name NAME] PATH
+  kinora-server library list
+  kinora-server scan [-library ID]
+  kinora-server version`
+
+type deps struct {
+	store   *store.Store
+	ffmpeg  *ffmpeg.Tool
+	tmdb    *tmdb.Client
+	prober  *probe.Prober
+	matcher *match.Matcher
+	scanner *scanner.Scanner
+	images  *images.Cache
+	log     *slog.Logger
+}
+
+func open(c config) (*deps, error) {
+	level := slog.LevelInfo
+	if c.debug {
+		level = slog.LevelDebug
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	if err := os.MkdirAll(c.dataDir, 0o755); err != nil {
+		return nil, err
+	}
+	st, err := store.Open(filepath.Join(c.dataDir, "kinora.db"))
+	if err != nil {
+		return nil, err
+	}
+	d := &deps{store: st, log: log}
+	d.prober = &probe.Prober{Binary: c.ffprobe}
+	d.ffmpeg = &ffmpeg.Tool{Binary: ffmpegPath(c), Log: log}
+	if c.tmdbKey != "" {
+		d.tmdb = tmdb.New(c.tmdbKey)
+		d.matcher = &match.Matcher{Store: st, Src: d.tmdb, Log: log}
+	}
+	d.scanner = &scanner.Scanner{Store: st, Prober: d.prober, Matcher: d.matcher, Log: log, Workers: c.workers}
+	d.images = images.New(filepath.Join(c.dataDir, "cache", "images"))
+	return d, nil
+}
+
+// ffmpegPath is -ffmpeg if set, else ffmpeg in the same folder as a given
+// ffprobe (they come together), else "" for ffmpeg on PATH.
+func ffmpegPath(c config) string {
+	if c.ffmpeg != "" {
+		return c.ffmpeg
+	}
+	if c.ffprobe == "" {
+		return ""
+	}
+	dir, file := filepath.Split(c.ffprobe)
+	name := strings.Replace(strings.ToLower(file), "ffprobe", "ffmpeg", 1)
+	if name == strings.ToLower(file) {
+		return ""
+	}
+	candidate := filepath.Join(dir, name)
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	return ""
+}
+
+// feature reads an on/off environment setting (on unless "0", "off",
+// "false" or "no").
+func feature(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "0", "off", "false", "no":
+		return false
+	}
+	return true
+}
+
+func serve(args []string) error {
+	var c config
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	commonFlags(fs, &c)
+	fs.StringVar(&c.listen, "listen", env("KINORA_LISTEN", ":8420"), "address to listen on")
+	fs.DurationVar(&c.rescan, "rescan", 6*time.Hour, "rescan libraries this often (0 to turn off)")
+	fs.Parse(args)
+
+	d, err := open(c)
+	if err != nil {
+		return err
+	}
+	defer d.store.Close()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var warnings []string
+	if err := d.prober.Available(); err != nil {
+		warnings = append(warnings, "ffprobe was not found. Install ffmpeg (which includes ffprobe) or pass -ffprobe /path/to/ffprobe; files can't be read without it.")
+	}
+	if d.matcher == nil {
+		warnings = append(warnings, "No TMDB key is set, so titles come from file names and there's no artwork. Start the server with KINORA_TMDB_KEY set.")
+	}
+	ffmpegOK := d.ffmpeg.Available() == nil
+	if !ffmpegOK {
+		warnings = append(warnings, "ffmpeg was not found, so files the TV can't play won't be converted, and there are no preview thumbnails or Skip intro. Install ffmpeg or pass -ffmpeg /path/to/ffmpeg.")
+	}
+	for _, w := range warnings {
+		d.log.Warn(w)
+	}
+
+	srv := &api.Server{
+		Store: d.store, Scanner: d.scanner, Matcher: d.matcher, Images: d.images,
+		Watch: &watch.Service{Store: d.store}, Log: d.log, Version: version,
+		BaseCtx: ctx, Warnings: warnings, TMDB: d.tmdb, FFprobe: c.ffprobe,
+	}
+	if ffmpegOK {
+		// Check hardware encoders now rather than on the first stream.
+		go d.ffmpeg.Caps()
+		if feature("KINORA_TRANSCODE") {
+			srv.Transcoder = &transcode.Transcoder{Tool: d.ffmpeg, Log: d.log}
+			srv.Transcoder.Init()
+		}
+		worker := &jobs.Worker{Store: d.store, Tool: d.ffmpeg, Log: d.log, Intros: feature("KINORA_INTROS")}
+		if feature("KINORA_TRICKPLAY") {
+			worker.Trickplay = &trickplay.Maker{Tool: d.ffmpeg, Dir: filepath.Join(c.dataDir, "cache", "trickplay")}
+			srv.Trickplay = worker.Trickplay
+		}
+		if worker.Trickplay != nil || worker.Intros {
+			srv.Jobs = worker
+			d.scanner.OnDone = func(int64) { worker.Kick() }
+			go worker.Run(ctx)
+		}
+	}
+	if secs := env("KINORA_WATCH", "60"); secs != "0" && secs != "off" {
+		every, err := strconv.Atoi(secs)
+		if err != nil || every < 10 {
+			every = 60
+		}
+		w := &watcher.Watcher{
+			Interval: time.Duration(every) * time.Second,
+			Log:      d.log,
+			Roots: func(ctx context.Context) ([]watcher.Root, error) {
+				libs, err := d.store.ListLibraries(ctx)
+				if err != nil {
+					return nil, err
+				}
+				roots := make([]watcher.Root, 0, len(libs))
+				for _, l := range libs {
+					roots = append(roots, watcher.Root{LibraryID: l.ID, Path: l.Path})
+				}
+				return roots, nil
+			},
+			OnChange: func(id int64) { go scanWhenFree(ctx, d, id) },
+		}
+		go w.Run(ctx)
+	}
+	httpSrv := &http.Server{
+		Addr:              c.listen,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		// No write timeout: streams run for hours.
+	}
+
+	go housekeeping(ctx, d, c.rescan)
+
+	errc := make(chan error, 1)
+	go func() { errc <- httpSrv.ListenAndServe() }()
+	if n, _ := d.store.CountUsers(ctx); n == 0 {
+		d.log.Info("first run: open the server in a browser to create the admin account", "url", "http://localhost"+portOf(c.listen))
+	}
+	d.log.Info("Kinora server running", "version", version, "listen", c.listen, "data", c.dataDir)
+
+	select {
+	case err := <-errc:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+	case <-ctx.Done():
+		d.log.Info("shutting down")
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return httpSrv.Shutdown(shutCtx)
+	}
+	return nil
+}
+
+func portOf(listen string) string {
+	if i := strings.LastIndex(listen, ":"); i >= 0 {
+		return listen[i:]
+	}
+	return ":" + listen
+}
+
+// waitingScans holds libraries with a scan already queued by scanWhenFree,
+// so changes seen during a long scan add up to one more scan, not many.
+var waitingScans sync.Map
+
+// scanWhenFree starts a scan for a library, waiting for a running one to
+// finish first so a change seen mid-scan isn't missed.
+func scanWhenFree(ctx context.Context, d *deps, id int64) {
+	if _, queued := waitingScans.LoadOrStore(id, true); queued {
+		return
+	}
+	defer waitingScans.Delete(id)
+	for range 120 {
+		err := d.scanner.Start(ctx, id)
+		if !errors.Is(err, scanner.ErrBusy) {
+			if err != nil {
+				d.log.Warn("scan after change", "library", id, "err", err)
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(15 * time.Second):
+		}
+	}
+}
+
+// housekeeping rescans libraries on a schedule (first pass shortly after
+// startup, to catch changes made while the server was off) and expires
+// old sessions.
+func housekeeping(ctx context.Context, d *deps, every time.Duration) {
+	first := time.NewTimer(30 * time.Second)
+	defer first.Stop()
+	var tick <-chan time.Time
+	if every > 0 {
+		t := time.NewTicker(every)
+		defer t.Stop()
+		tick = t.C
+	}
+	run := func() {
+		_ = d.store.ExpireSessions(ctx)
+		if every <= 0 {
+			return
+		}
+		libs, err := d.store.ListLibraries(ctx)
+		if err != nil {
+			d.log.Warn("rescan", "err", err)
+			return
+		}
+		for _, l := range libs {
+			if err := d.scanner.Start(ctx, l.ID); err != nil && !errors.Is(err, scanner.ErrBusy) {
+				d.log.Warn("rescan", "library", l.Name, "err", err)
+			}
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-first.C:
+			run()
+		case <-tick:
+			run()
+		}
+	}
+}
+
+func readPassword(flagValue string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	if v := os.Getenv("KINORA_PASSWORD"); v != "" {
+		return v, nil
+	}
+	fmt.Fprint(os.Stderr, "Password (shown as you type): ")
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+func userCmd(args []string) error {
+	if len(args) == 0 {
+		return errors.New("user needs a subcommand: add or passwd")
+	}
+	sub, args := args[0], args[1:]
+	var c config
+	fs := flag.NewFlagSet("user "+sub, flag.ExitOnError)
+	commonFlags(fs, &c)
+	username := fs.String("username", "", "username")
+	password := fs.String("password", "", "password (or KINORA_PASSWORD, or typed)")
+	admin := fs.Bool("admin", false, "make the user an admin (the first user always is)")
+	fs.Parse(args)
+	if *username == "" {
+		return errors.New("-username is required")
+	}
+	d, err := open(c)
+	if err != nil {
+		return err
+	}
+	defer d.store.Close()
+	ctx := context.Background()
+	pass, err := readPassword(*password)
+	if err != nil {
+		return err
+	}
+	hash, err := auth.HashPassword(pass)
+	if err != nil {
+		return err
+	}
+	switch sub {
+	case "add":
+		n, err := d.store.CountUsers(ctx)
+		if err != nil {
+			return err
+		}
+		u, err := d.store.CreateUser(ctx, *username, hash, *admin || n == 0)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Created user %s (admin: %v)\n", u.Username, u.IsAdmin)
+	case "passwd":
+		u, err := d.store.UserByName(ctx, *username)
+		if err != nil {
+			return fmt.Errorf("user %s not found", *username)
+		}
+		if err := d.store.SetPassword(ctx, u.ID, hash); err != nil {
+			return err
+		}
+		fmt.Println("Password changed; the user was signed out everywhere.")
+	default:
+		return fmt.Errorf("unknown user subcommand %q", sub)
+	}
+	return nil
+}
+
+func libraryCmd(args []string) error {
+	if len(args) == 0 {
+		return errors.New("library needs a subcommand: add or list")
+	}
+	sub, args := args[0], args[1:]
+	var c config
+	fs := flag.NewFlagSet("library "+sub, flag.ExitOnError)
+	commonFlags(fs, &c)
+	name := fs.String("name", "", "library name (default: folder name)")
+	kind := fs.String("kind", "", "movies or tv")
+	fs.Parse(args)
+	d, err := open(c)
+	if err != nil {
+		return err
+	}
+	defer d.store.Close()
+	ctx := context.Background()
+	switch sub {
+	case "add":
+		if fs.NArg() != 1 {
+			return errors.New("give exactly one folder path")
+		}
+		if *kind != store.KindMovies && *kind != store.KindTV {
+			return errors.New(`-kind must be "movies" or "tv"`)
+		}
+		path, err := filepath.Abs(fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
+			return fmt.Errorf("folder not found: %s", path)
+		}
+		n := *name
+		if n == "" {
+			n = filepath.Base(path)
+		}
+		lib, err := d.store.CreateLibrary(ctx, n, path, *kind)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Added library %d: %s (%s) at %s\nRun \"kinora-server scan\" or start the server to scan it.\n", lib.ID, lib.Name, lib.Kind, lib.Path)
+	case "list":
+		libs, err := d.store.ListLibraries(ctx)
+		if err != nil {
+			return err
+		}
+		for _, l := range libs {
+			st, _ := d.store.LibraryStats(ctx, l.ID)
+			fmt.Printf("%d\t%s\t%s\t%s\tmovies=%d shows=%d episodes=%d unmatched=%d files=%d\n",
+				l.ID, l.Name, l.Kind, l.Path, st.Movies, st.Shows, st.Episodes, st.Unmatched, st.Files)
+		}
+	default:
+		return fmt.Errorf("unknown library subcommand %q", sub)
+	}
+	return nil
+}
+
+func scanCmd(args []string) error {
+	var c config
+	fs := flag.NewFlagSet("scan", flag.ExitOnError)
+	commonFlags(fs, &c)
+	only := fs.Int64("library", 0, "library ID (default: all)")
+	fs.Parse(args)
+	d, err := open(c)
+	if err != nil {
+		return err
+	}
+	defer d.store.Close()
+	if err := d.prober.Available(); err != nil {
+		return errors.New("ffprobe not found: install ffmpeg or pass -ffprobe")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	libs, err := d.store.ListLibraries(ctx)
+	if err != nil {
+		return err
+	}
+	for _, l := range libs {
+		if *only != 0 && l.ID != *only {
+			continue
+		}
+		start := time.Now()
+		p, err := d.scanner.Run(ctx, l.ID)
+		if err != nil {
+			return fmt.Errorf("%s: %w", l.Name, err)
+		}
+		fmt.Printf("%s: %d files, %d new, %d changed, %d skipped, %d missing, %d errors, %d matched, %d unmatched (%s)\n",
+			l.Name, p.FilesSeen, p.New, p.Changed, p.Skipped, p.Missing, p.Errors, p.Matched, p.Unmatched,
+			time.Since(start).Round(time.Second))
+		if p.Message != "" {
+			fmt.Println("  " + p.Message)
+		}
+	}
+	return nil
+}

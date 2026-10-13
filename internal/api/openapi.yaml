@@ -1,0 +1,711 @@
+openapi: 3.1.0
+info:
+  title: Kinora Server API
+  version: 0.1.0
+  description: |
+    JSON API used by the Kinora apps. Sign in with POST /auth/login and send
+    the returned token as `Authorization: Bearer <token>` on every request.
+    Stream and image URLs also accept `?token=<token>` so plain players such
+    as VLC can open them.
+servers:
+  - url: /api/v1
+security:
+  - bearer: []
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        isAdmin: { type: boolean }
+        createdAt: { type: integer, description: Unix seconds }
+    WatchState:
+      type: object
+      properties:
+        itemId: { type: string }
+        positionSec: { type: number }
+        completed: { type: boolean }
+        playCount: { type: integer }
+        lastPlayedAt: { type: integer }
+    Item:
+      type: object
+      properties:
+        id: { type: string }
+        libraryId: { type: integer }
+        kind: { type: string, enum: [movie, show, season, episode] }
+        parentId: { type: string }
+        title: { type: string }
+        sortTitle: { type: string }
+        year: { type: integer }
+        seasonNumber: { type: integer, description: -1 when not a season or episode }
+        episodeNumber: { type: integer, description: -1 when not an episode }
+        overview: { type: string }
+        rating: { type: number, description: TMDB average, 0 to 10 }
+        runtimeMin: { type: integer }
+        airDate: { type: string }
+        matchState: { type: string, enum: [pending, matched, unmatched, manual] }
+        matchConfidence: { type: number }
+        addedAt: { type: integer }
+        updatedAt: { type: integer }
+        posterUrl: { type: string, description: "Add ?w=<width> for a resized copy" }
+        backdropUrl: { type: string }
+        watch: { $ref: "#/components/schemas/WatchState" }
+    Stream:
+      type: object
+      properties:
+        index: { type: integer }
+        type: { type: string, enum: [video, audio, subtitle] }
+        codec: { type: string }
+        profile: { type: string }
+        language: { type: string }
+        title: { type: string }
+        channels: { type: integer }
+        default: { type: boolean }
+        forced: { type: boolean }
+    Version:
+      type: object
+      properties:
+        id: { type: string }
+        itemId: { type: string }
+        relPath: { type: string }
+        part: { type: integer }
+        size: { type: integer }
+        container: { type: string }
+        durationSec: { type: number }
+        bitrate: { type: integer }
+        width: { type: integer }
+        height: { type: integer }
+        videoCodec: { type: string }
+        hdr: { type: string, enum: ["", hdr10, hlg, dolby_vision] }
+        dvProfile: { type: integer }
+        streams:
+          type: array
+          items: { $ref: "#/components/schemas/Stream" }
+        streamUrl: { type: string }
+        transcodeUrl: { type: string, description: Converts the file (when the server has ffmpeg) }
+        trickplayUrl: { type: string, description: Preview thumbnails (once made) }
+        intro:
+          type: object
+          description: Where the opening titles are, when found
+          properties: { start: { type: number }, end: { type: number } }
+    Library:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        path: { type: string }
+        kind: { type: string, enum: [movies, tv] }
+        lastScanAt: { type: integer }
+        stats:
+          type: object
+          properties:
+            movies: { type: integer }
+            shows: { type: integer }
+            episodes: { type: integer }
+            unmatched: { type: integer }
+            pending: { type: integer }
+            files: { type: integer }
+            missing: { type: integer }
+            probeErrors: { type: integer }
+        scan:
+          type: object
+          description: Present after a scan has run since the server started.
+          properties:
+            running: { type: boolean }
+            phase: { type: string, enum: [walking, matching, done, failed] }
+            filesSeen: { type: integer }
+            new: { type: integer }
+            changed: { type: integer }
+            message: { type: string }
+    Profile:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        color: { type: string, example: "#F2B33D" }
+        hasPin: { type: boolean }
+        kids: { type: boolean }
+        audioLang: { type: string, description: "ISO 639-2 code such as eng; empty = file default" }
+        subtitleLang: { type: string }
+        subtitleMode: { type: string, enum: [off, forced, always] }
+    TrackPrefs:
+      type: object
+      description: A profile's choices for a show or movie, merged over the profile's defaults.
+      properties:
+        audioLang: { type: string }
+        subtitleLang: { type: string }
+        subtitleMode: { type: string, enum: ["", off, forced, always] }
+    CastMember:
+      type: object
+      properties:
+        order: { type: integer }
+        name: { type: string }
+        role: { type: string }
+        photoUrl: { type: string, description: "Add ?w=<width>" }
+    NextUp:
+      type: object
+      properties:
+        episode: { $ref: "#/components/schemas/Item" }
+        inProgress: { type: boolean }
+        reason: { type: string, example: "You finished S02E04 yesterday" }
+        gaps:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              season: { type: integer }
+              episode: { type: integer }
+
+paths:
+  /health:
+    get:
+      summary: Server status (no sign-in needed)
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  version: { type: string }
+                  setupDone: { type: boolean }
+                  metadata: { type: boolean, description: Whether a TMDB key is set }
+
+  /auth/login:
+    post:
+      summary: Sign in a device
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+                deviceName: { type: string, example: Living room Shield }
+      responses:
+        "200":
+          description: Signed in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  user: { $ref: "#/components/schemas/User" }
+                  profiles:
+                    type: array
+                    description: Show "Who's watching?" when there is more than one
+                    items: { $ref: "#/components/schemas/Profile" }
+        "401": { description: Wrong username or password }
+        "429": { description: Too many failed attempts }
+
+  /auth/logout:
+    post:
+      summary: Sign this device out
+      responses:
+        "204": { description: Signed out }
+
+  /me:
+    get:
+      summary: The signed-in user
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+
+  /libraries:
+    get:
+      summary: Libraries with counts and scan status
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Library" }
+    post:
+      summary: Add a library and start its first scan (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, kind]
+              properties:
+                name: { type: string }
+                path: { type: string, description: Absolute folder path on the server }
+                kind: { type: string, enum: [movies, tv] }
+      responses:
+        "201": { description: Created }
+        "400": { description: Invalid folder or kind }
+
+  /libraries/{id}:
+    delete:
+      summary: Remove a library (admin). Files are not touched.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Removed }
+
+  /libraries/{id}/scan:
+    post:
+      summary: Start a scan (admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "202": { description: Started }
+        "409": { description: A scan is already running }
+
+  /libraries/{id}/rematch:
+    post:
+      summary: Retry matching for unmatched items, then scan (admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "202": { description: Started }
+
+  /items:
+    get:
+      summary: Browse items
+      parameters:
+        - { name: libraryId, in: query, schema: { type: integer } }
+        - { name: kind, in: query, schema: { type: string, enum: [movie, show, season, episode] } }
+        - { name: parentId, in: query, schema: { type: string } }
+        - { name: matchState, in: query, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [title, added, year, length, rating] } }
+        - { name: genre, in: query, schema: { type: string }, description: 'A TMDB genre such as "Comedy"' }
+        - { name: watched, in: query, schema: { type: string, enum: [unwatched, started, watched] }, description: "For the current profile. Shows: started = some episodes seen, watched = all" }
+        - { name: maxRuntime, in: query, schema: { type: integer }, description: Minutes }
+        - { name: quality, in: query, schema: { type: string, enum: [best] }, description: Only titles with a 4K or HDR file }
+        - { name: q, in: query, schema: { type: string }, description: Title words }
+        - { name: limit, in: query, schema: { type: integer, maximum: 500, default: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Item" }
+                  nextOffset: { type: integer, description: Present when more items may follow }
+
+  /items/{id}:
+    get:
+      summary: Item details
+      description: Movies and episodes include their files. Episodes include their season and show. Shows include the next episode.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  item: { $ref: "#/components/schemas/Item" }
+                  versions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Version" }
+                  season: { $ref: "#/components/schemas/Item" }
+                  show: { $ref: "#/components/schemas/Item" }
+                  nextUp: { $ref: "#/components/schemas/NextUp" }
+                  cast:
+                    type: array
+                    description: Movies and shows; episodes get their show's cast
+                    items: { $ref: "#/components/schemas/CastMember" }
+                  trackPrefs: { $ref: "#/components/schemas/TrackPrefs" }
+
+  /items/letters:
+    get:
+      summary: Where each letter starts in the A to Z list, for a jump bar
+      description: Takes the same filters as /items (sort is always title). "#" is titles starting with a digit or symbol.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  letters:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        letter: { type: string }
+                        offset: { type: integer }
+
+  /items/{id}/prefs:
+    put:
+      summary: Save audio and subtitle choices for the show or movie this item belongs to
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TrackPrefs" }
+      responses:
+        "200":
+          description: The merged preferences now in effect
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrackPrefs" }
+
+  /search:
+    get:
+      summary: Find movies and shows by title
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 40, maximum: 100 } }
+      responses:
+        "200":
+          description: Best matches first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Item" }
+
+  /profiles:
+    get:
+      summary: This account's profiles and the one this device is watching as
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  profiles:
+                    type: array
+                    items: { $ref: "#/components/schemas/Profile" }
+                  current: { type: integer }
+    post:
+      summary: Add a profile (up to 12)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                color: { type: string }
+                pin: { type: string, description: 4 digits }
+                kids: { type: boolean }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+
+  /profiles/{id}:
+    patch:
+      summary: Change a profile (fields not sent stay as they are; pin "" removes the PIN)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Updated }
+        "403": { description: The profile has a PIN and isn't the one selected }
+    delete:
+      summary: Remove a profile and its history (not the last one)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Removed }
+
+  /profiles/{id}/select:
+    post:
+      summary: Watch as this profile on this device
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pin: { type: string }
+      responses:
+        "200": { description: Selected }
+        "403": { description: Wrong PIN }
+        "429": { description: Too many wrong PINs }
+
+  /cast/{id}/{ord}:
+    get:
+      summary: A cast member's photo, resized on request
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: ord, in: path, required: true, schema: { type: integer } }
+        - { name: w, in: query, schema: { type: integer } }
+        - { name: token, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Image }
+        "404": { description: No photo }
+
+  /items/{id}/children:
+    get:
+      summary: Seasons of a show, or episodes of a season, in order
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Item" }
+
+  /items/{id}/watched:
+    post:
+      summary: Mark watched or unwatched (shows and seasons apply to every episode)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                watched: { type: boolean }
+      responses:
+        "204": { description: Done }
+
+  /items/{id}/match:
+    post:
+      summary: Fix a match by TMDB ID (admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tmdbId: { type: integer }
+      responses:
+        "200":
+          description: Matched
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Item" }
+
+  /home:
+    get:
+      summary: Continue Watching and Recently Added
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  continueWatching:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        item: { $ref: "#/components/schemas/Item" }
+                        showId: { type: string }
+                        showTitle: { type: string }
+                        positionSec: { type: number }
+                        inProgress: { type: boolean }
+                        reason: { type: string }
+                  recentlyAdded:
+                    type: array
+                    items: { $ref: "#/components/schemas/Item" }
+
+  /progress/{id}:
+    put:
+      summary: Report playback position for a movie or episode
+      description: |
+        Send every 10 seconds, on pause, and on stop. Past 92% of the file's
+        length the item is marked watched. Reports older than the stored one
+        (by clientTime) are ignored, so offline reports can be replayed safely.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [positionSec]
+              properties:
+                positionSec: { type: number }
+                versionId: { type: string }
+                clientTime: { type: integer, description: Unix seconds when the position was read }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WatchState" }
+
+  /stream/{id}:
+    get:
+      summary: Direct play a file (supports Range requests)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: Version ID }
+        - { name: token, in: query, schema: { type: string } }
+      responses:
+        "200": { description: The whole file }
+        "206": { description: Part of the file }
+
+  /images/{id}/{kind}:
+    get:
+      summary: Artwork, resized on request
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [poster, backdrop, still] } }
+        - { name: w, in: query, schema: { type: integer }, description: "Width; rounded up to 160, 240, 320, 400, 640, 960, 1280 or 1920" }
+        - { name: token, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Image }
+        "404": { description: No artwork }
+
+  /transcode/{id}:
+    get:
+      summary: Convert a file on the fly for players that can't play it as is
+      description: |
+        A Matroska stream written as ffmpeg produces it. It can't be seeked;
+        to jump, request a new stream with a different start. Present on a
+        version as transcodeUrl when the server has ffmpeg.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: Version ID }
+        - { name: start, in: query, schema: { type: number }, description: Seconds to begin at }
+        - { name: video, in: query, required: true, schema: { type: string, enum: [copy, h264] } }
+        - { name: maxBitrate, in: query, schema: { type: integer }, description: "kbit/s for re-encoded video (default 8000)" }
+        - { name: maxHeight, in: query, schema: { type: integer }, description: "Pixels for re-encoded video (default 1080)" }
+        - { name: audio, in: query, schema: { type: integer }, description: Source stream index of the audio track (default the first) }
+        - { name: audioCodec, in: query, required: true, schema: { type: string, enum: [copy, aac] } }
+        - { name: token, in: query, schema: { type: string } }
+      responses:
+        "200": { description: The converted stream }
+        "400": { description: Bad options }
+        "503": { description: Too many conversions running }
+
+  /speedtest:
+    get:
+      summary: Random bytes, for the app to measure the connection
+      parameters:
+        - { name: bytes, in: query, schema: { type: integer }, description: "64 KB to 32 MB" }
+      responses:
+        "200": { description: Bytes }
+
+  /trickplay/{id}:
+    get:
+      summary: Preview thumbnails for skipping through a file
+      description: |
+        Frame n (time n * interval) is on sheet floor(n / (cols * rows)) + 1,
+        at column n % cols and row floor(n / cols) % rows. Asking for a file
+        without previews moves it to the front of the queue.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: Version ID }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  interval: { type: integer }
+                  width: { type: integer }
+                  height: { type: integer }
+                  cols: { type: integer }
+                  rows: { type: integer }
+                  count: { type: integer }
+                  sheets: { type: integer }
+                  sheetUrl: { type: string, description: 'Has "{n}" where the sheet number goes' }
+        "404": { description: Not made yet }
+
+  /trickplay/{id}/{sheet}:
+    get:
+      summary: One sheet of preview thumbnails (JPEG)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: sheet, in: path, required: true, schema: { type: string }, description: 'Like "1.jpg"' }
+        - { name: token, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Image }
+
+  /genres:
+    get:
+      summary: Genres with available titles, most titles first
+      parameters:
+        - { name: kind, in: query, schema: { type: string, enum: [movie, show] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  genres:
+                    type: array
+                    items: { type: object, properties: { name: { type: string }, count: { type: integer } } }
+
+  /trending:
+    get:
+      summary: What's trending on TMDB this week, marked with what's in the library
+      description: |
+        Lists of titles (today, movies, shows) from TMDB, refreshed hourly.
+        Each has `item` set when it's in the library; `inLibrary` collects
+        those. Needs a TMDB key.
+      responses:
+        "200": { description: OK }
+        "501": { description: No TMDB key on the server }
+        "502": { description: TMDB couldn't be reached }
+
+  /tmdb-image/{file}:
+    get:
+      summary: TMDB artwork for titles not in the library (Trending), resized on request
+      parameters:
+        - { name: file, in: path, required: true, schema: { type: string }, description: 'Like "abc123.jpg"' }
+        - { name: w, in: query, schema: { type: integer } }
+        - { name: token, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Image }

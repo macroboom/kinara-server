@@ -1,0 +1,76 @@
+{{define "top"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{if .Refresh}}<meta http-equiv="refresh" content="3">{{end}}
+<title>{{.Title}} · Kinora</title>
+<style>
+:root { --bg: #0f1115; --card: #181b22; --line: #2a2e38; --text: #eceae4; --quiet: #a3a8b3; --accent: #f2b33d; --good: #5bc98b; --bad: #e86a5c; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header .brand { font-weight: 700; font-size: 20px; color: var(--text); }
+main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+h1 { font-size: 28px; margin: 0 0 8px; }
+h2 { font-size: 19px; margin: 32px 0 12px; }
+.quiet { color: var(--quiet); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; }
+.msg { padding: 10px 14px; border-radius: 10px; margin-bottom: 16px; }
+.msg.ok { background: #13261c; color: #c6ebd4; }
+.msg.err { background: #2c1715; color: #f5c9c3; }
+.msg.warn { background: #2a2416; color: #e6d9b8; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--quiet); font-weight: 600; font-size: 13px; }
+.table-wrap { overflow-x: auto; }
+form.inline { display: inline; }
+button, .button { background: #2a2f3a; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; }
+button.primary { background: var(--text); color: #0f1115; border-color: var(--text); font-weight: 600; }
+button.danger { color: #f5c9c3; }
+input, select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; font: inherit; }
+label { display: block; font-size: 13px; color: var(--quiet); margin-bottom: 4px; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 16px; }
+.poster { display: block; color: var(--text); }
+.poster .art { position: relative; aspect-ratio: 2 / 3; border-radius: 8px; background: var(--card); border: 1px solid var(--line); overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 12px; text-align: center; color: var(--quiet); font-size: 14px; }
+.poster .art.wide { aspect-ratio: 16 / 9; }
+.poster .art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.poster .t { margin-top: 6px; font-size: 14px; line-height: 1.3; }
+.badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--quiet); }
+.badge.good { color: var(--good); border-color: #2f5b42; }
+.badge.bad { color: var(--bad); border-color: #5b2f2a; }
+.badge.warn { color: var(--accent); border-color: #5a4a22; }
+.tabs { display: flex; gap: 8px; margin: 16px 0; flex-wrap: wrap; }
+.tabs a { padding: 6px 14px; border-radius: 999px; background: var(--card); color: var(--quiet); }
+.tabs a.on { background: var(--text); color: #0f1115; }
+.detail { display: flex; gap: 24px; flex-wrap: wrap; }
+.detail .art { width: 220px; flex: none; }
+.detail .art img { width: 100%; border-radius: 10px; }
+.detail .info { flex: 1 1 360px; min-width: 0; }
+code, .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; word-break: break-all; }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="/">Kinora</a>
+  {{if .User.Username}}
+  <div class="row">
+    <span class="quiet">{{.User.Username}}{{if .User.IsAdmin}} (admin){{end}}</span>
+    <form class="inline" method="post" action="/logout"><button>Sign out</button></form>
+  </div>
+  {{end}}
+</header>
+<main>
+{{range .Warnings}}<div class="msg warn">{{.}}</div>{{end}}
+{{if .Message}}<div class="msg ok">{{.Message}}</div>{{end}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{end}}
+
+{{define "bottom"}}
+</main>
+</body>
+</html>
+{{end}}

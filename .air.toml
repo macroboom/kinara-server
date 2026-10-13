@@ -1,0 +1,28 @@
+# Live reload for development: run `air` in the repo root.
+# Rebuilds and restarts the server when Go code, templates, SQL migrations
+# or .env change. Install air with:
+#   go install github.com/air-verse/air@latest
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # The server's main package is in cmd/kinora-server, not the repo root.
+  cmd = "go build -o ./tmp/kinora-server.exe ./cmd/kinora-server"
+  bin = "tmp/kinora-server.exe"
+  # Templates and migrations are embedded, so they need a rebuild too.
+  include_ext = ["go", "html", "css", "js", "sql"]
+  include_file = [".env"]
+  exclude_dir = ["tmp", "kinora-data", "vendor", ".git"]
+  exclude_regex = ["_test\\.go$"]
+  # Wait for a burst of saves to finish before rebuilding.
+  delay = 500
+  stop_on_error = true
+  # Windows can't send Ctrl+C to a child process; air kills it instead.
+  send_interrupt = false
+  kill_delay = "1s"
+
+[log]
+  time = false
+
+[misc]
+  clean_on_exit = true

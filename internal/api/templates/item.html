@@ -1,0 +1,128 @@
+{{define "item.html"}}{{template "top" .}}
+{{$it := .Data.Item}}
+<p>{{with .Data.Parent}}<a href="/ui/items/{{.ID}}">← {{.Title}}</a>{{else}}<a href="/ui/libraries/{{$it.LibraryID}}">← Library</a>{{end}}</p>
+<div class="detail">
+  <div class="art">
+    <img src="/api/v1/images/{{$it.ID}}/{{if eq $it.Kind "episode"}}still{{else}}poster{{end}}?w=400" alt="" onerror="this.remove()">
+  </div>
+  <div class="info">
+    <h1>{{$it.Title}}{{if $it.Year}} <span class="quiet">({{$it.Year}})</span>{{end}}</h1>
+    <p>
+      <span class="badge">{{$it.Kind}}</span>
+      {{if eq $it.Kind "episode"}}<span class="badge">{{code $it.SeasonNumber $it.EpisodeNumber}}</span>{{end}}
+      {{if eq $it.MatchState "matched"}}<span class="badge good">matched {{percent $it.MatchConfidence}}</span>
+      {{else if eq $it.MatchState "unmatched"}}<span class="badge warn">unmatched</span>
+      {{else}}<span class="badge">{{$it.MatchState}}</span>{{end}}
+      {{if $it.Rating}}<span class="badge">{{printf "%.1f" $it.Rating}} / 10</span>{{end}}
+      {{if $it.RuntimeMin}}<span class="badge">{{$it.RuntimeMin}} min</span>{{end}}
+      {{if $it.AirDate}}<span class="badge">{{$it.AirDate}}</span>{{end}}
+    </p>
+    {{if $it.Overview}}<p>{{$it.Overview}}</p>{{end}}
+
+    {{if or (eq $it.Kind "movie") (eq $it.Kind "episode")}}
+    <p>
+      {{if .Data.Watch.Completed}}<span class="badge good">watched{{if gt .Data.Watch.PlayCount 1}} {{.Data.Watch.PlayCount}} times{{end}}</span>{{end}}
+      {{if .Data.Watch.PositionSec}}<span class="badge warn">stopped at {{duration .Data.Watch.PositionSec}}</span>{{end}}
+    </p>
+    <form class="inline" method="post" action="/ui/items/{{$it.ID}}/watched">
+      <input type="hidden" name="watched" value="{{if .Data.Watch.Completed}}0{{else}}1{{end}}">
+      <button>{{if .Data.Watch.Completed}}Mark unwatched{{else}}Mark watched{{end}}</button>
+    </form>
+    {{end}}
+
+    {{with .Data.NextUp}}
+    <div class="card" style="margin-top: 16px">
+      <strong>Where you are</strong>
+      <p class="quiet" style="margin: 4px 0">{{.Reason}}</p>
+      {{with .Episode}}<p>Up next: <a href="/ui/items/{{.ID}}">{{code .SeasonNumber .EpisodeNumber}} · {{.Title}}</a>{{if $.Data.NextUp.InProgress}} (in progress){{end}}</p>{{end}}
+      {{with .Gaps}}<p class="quiet">Skipped: {{range $i, $g := .}}{{if $i}}, {{end}}<a href="/ui/items/{{$g.ID}}">{{code $g.Season $g.Episode}}</a>{{end}}</p>{{end}}
+    </div>
+    {{end}}
+
+    {{if .Data.CanMatch}}
+    <form class="row" method="post" action="/ui/items/{{$it.ID}}/match" style="margin-top: 16px">
+      <div><label for="tmdbId">Wrong match? TMDB ID</label><input id="tmdbId" name="tmdbId" inputmode="numeric" size="10"></div>
+      <button>Re-match</button>
+    </form>
+    {{end}}
+  </div>
+</div>
+
+{{with .Data.Versions}}
+<h2>Files</h2>
+{{range .}}
+<div class="card" style="margin-bottom: 12px">
+  <p class="mono">{{.RelPath}}</p>
+  <p>
+    <span class="badge">{{resolution .Width .Height}}</span>
+    <span class="badge">{{.VideoCodec}}</span>
+    {{if .HDR}}<span class="badge warn">{{if eq .HDR "dolby_vision"}}Dolby Vision{{if .DVProfile}} profile {{.DVProfile}}{{end}}{{else}}{{.HDR}}{{end}}</span>{{end}}
+    <span class="badge">{{.Container}}</span>
+    <span class="badge">{{duration .DurationSec}}</span>
+    <span class="badge">{{size .Size}}</span>
+    {{if .Bitrate}}<span class="badge">{{printf "%.1f" (divide .Bitrate)}} Mb/s</span>{{end}}
+    {{if .Part}}<span class="badge">part {{.Part}}</span>{{end}}
+  </p>
+  {{if .ProbeError}}<p class="msg err">{{.ProbeError}}</p>{{end}}
+  <div class="table-wrap"><table>
+    <tr><th>#</th><th>Type</th><th>Codec</th><th>Language</th><th>Details</th></tr>
+    {{range .Streams}}
+    <tr><td>{{.Index}}</td><td>{{.Type}}</td><td>{{.Codec}}{{if .Profile}} <span class="quiet">{{.Profile}}</span>{{end}}</td>
+      <td>{{.Language}}</td><td class="quiet">{{if .Channels}}{{.Channels}} ch {{end}}{{.Title}}{{if .Default}} · default{{end}}{{if .Forced}} · forced{{end}}</td></tr>
+    {{end}}
+  </table></div>
+  <details class="browser-play">
+    <summary>Play in this browser</summary>
+    <p class="quiet">A quick check only. Browsers can't play Dolby Vision, and most can't play the audio in films (TrueHD, DTS, AC3), so silence or a black picture here doesn't mean the file is broken. VLC or the TV app is the real test.</p>
+    <video controls preload="none" playsinline style="width: 100%; max-height: 70vh; background: #000; border-radius: 8px"
+      data-src="{{.StreamURL}}?token={{$.Data.Token}}"></video>
+    <p class="msg err" hidden>This browser can't play this file. Try VLC with the link below.</p>
+  </details>
+  <p class="quiet" style="margin-bottom: 0">Play it in VLC (Media › Open Network Stream):</p>
+  <p class="mono" style="margin-top: 4px">{{$.Data.Origin}}{{.StreamURL}}?token={{$.Data.Token}}</p>
+</div>
+{{end}}
+{{end}}
+
+{{with .Data.Children}}
+<h2>{{if eq $it.Kind "show"}}Seasons{{else}}Episodes{{end}}</h2>
+<div class="card table-wrap"><table>
+  {{range .}}
+  <tr>
+    <td style="width: 90px">{{if eq .Item.Kind "episode"}}{{code .Item.SeasonNumber .Item.EpisodeNumber}}{{else}}{{.Item.Title}}{{end}}</td>
+    <td><a href="/ui/items/{{.Item.ID}}">{{.Item.Title}}</a>{{if .Item.AirDate}} <span class="quiet">{{.Item.AirDate}}</span>{{end}}</td>
+    <td>
+      {{if eq .Item.Kind "episode"}}
+        {{if .Watch.Completed}}<span class="badge good">watched</span>{{else if .Watch.PositionSec}}<span class="badge warn">{{duration .Watch.PositionSec}} in</span>{{end}}
+      {{end}}
+    </td>
+    <td>
+      {{if eq .Item.Kind "episode"}}
+      <form class="inline" method="post" action="/ui/items/{{.Item.ID}}/watched">
+        <input type="hidden" name="watched" value="{{if .Watch.Completed}}0{{else}}1{{end}}">
+        <input type="hidden" name="back" value="/ui/items/{{$it.ID}}">
+        <button>{{if .Watch.Completed}}Unwatch{{else}}Watched{{end}}</button>
+      </form>
+      {{end}}
+    </td>
+  </tr>
+  {{end}}
+</table></div>
+{{end}}
+<script>
+// Load a video only when its "Play in this browser" section is opened, so
+// opening the page never starts reading a large file.
+document.querySelectorAll("details.browser-play").forEach(function (d) {
+  d.addEventListener("toggle", function () {
+    var v = d.querySelector("video");
+    if (d.open && !v.src) {
+      v.src = v.dataset.src;
+      v.addEventListener("error", function () { d.querySelector(".msg").hidden = false; });
+      v.play().catch(function () {});
+    } else if (!d.open) {
+      v.pause();
+    }
+  });
+});
+</script>
+{{template "bottom"}}{{end}}

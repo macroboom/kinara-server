@@ -1,0 +1,78 @@
+{{define "dashboard.html"}}{{template "top" .}}
+<h1>Libraries</h1>
+{{with .Data.Libraries}}
+<div class="card table-wrap">
+<table>
+  <tr><th>Library</th><th>Contents</th><th>Needs a look</th><th>Files</th><th>Last scan</th><th>Status</th><th></th></tr>
+  {{range .}}
+  <tr>
+    <td><a href="/ui/libraries/{{.ID}}"><strong>{{.Name}}</strong></a><br><span class="quiet mono">{{.Path}}</span><br><span class="badge">{{if eq .Kind "tv"}}TV shows{{else}}Movies{{end}}</span></td>
+    <td>{{if eq .Kind "tv"}}{{.Stats.Shows}} shows<br>{{.Stats.Episodes}} episodes{{else}}{{.Stats.Movies}} movies{{end}}</td>
+    <td>
+      {{if .Stats.Unmatched}}<a href="/ui/libraries/{{.ID}}?tab=review"><span class="badge warn">{{.Stats.Unmatched}} unmatched</span></a><br>{{end}}
+      {{if .Stats.Pending}}<span class="badge">{{.Stats.Pending}} waiting to match</span><br>{{end}}
+      {{if .Stats.ProbeErrors}}<a href="/ui/libraries/{{.ID}}?tab=files"><span class="badge bad">{{.Stats.ProbeErrors}} unreadable</span></a><br>{{end}}
+      {{if .Stats.Unplaced}}<a href="/ui/libraries/{{.ID}}?tab=files"><span class="badge bad">{{.Stats.Unplaced}} not placed</span></a>{{end}}
+      {{if and (not .Stats.Unmatched) (not .Stats.Pending) (not .Stats.ProbeErrors) (not .Stats.Unplaced)}}<span class="badge good">All good</span>{{end}}
+    </td>
+    <td>{{.Stats.Files}}{{if .Stats.Missing}}<br><span class="quiet">{{.Stats.Missing}} missing</span>{{end}}</td>
+    <td>{{date .LastScanAt}}</td>
+    <td>
+      {{with .Scan}}
+        {{if .Running}}<span class="badge warn">{{.Phase}}</span><br><span class="quiet">{{.FilesSeen}} files found{{if .ToProbe}}, read {{.Probed}} of {{.ToProbe}}{{end}}{{if .Disk}}<br>{{.Disk}}, {{.Workers}} at a time{{end}}</span>
+        {{else if eq .Phase "failed"}}<span class="badge bad">failed</span><br><span class="quiet">{{.Message}}</span>
+        {{else}}<span class="badge good">done</span><br><span class="quiet">{{.New}} new, {{.Changed}} changed{{if .Skipped}}, {{.Skipped}} skipped{{end}}{{if .Matched}}, {{.Matched}} matched{{end}}{{if .Inferred}}, {{.Inferred}} episode number{{if gt .Inferred 1}}s{{end}} worked out from the folder{{end}}</span>{{if .DiscFolders}}<br><span class="quiet">Skipped {{.DiscFolders}} Blu-ray/DVD disc folder{{if gt .DiscFolders 1}}s{{end}} (BDMV, VIDEO_TS). Rip them to single files to add them.</span>{{end}}{{if .Message}}<br><span class="quiet">{{.Message}}</span>{{end}}
+        {{end}}
+      {{else}}<span class="quiet">idle</span>{{end}}
+    </td>
+    <td>
+      {{if $.User.IsAdmin}}
+      <form class="inline" method="post" action="/ui/libraries/{{.ID}}/scan"><button>Scan</button></form>
+      {{if .Stats.Unmatched}}<form class="inline" method="post" action="/ui/libraries/{{.ID}}/rematch"><button>Retry matching</button></form>{{end}}
+      {{end}}
+    </td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{else}}
+<p class="quiet">No libraries yet. Add your Movies and TV folders below.</p>
+{{end}}
+
+{{if .User.IsAdmin}}
+<h2>Add a library</h2>
+<form class="card row" method="post" action="/ui/libraries">
+  <div><label for="kind">What's in it</label>
+    <select id="kind" name="kind"><option value="movies">Movies</option><option value="tv">TV shows</option></select></div>
+  <div style="flex: 1 1 320px"><label for="path">Folder on this server</label>
+    <input id="path" name="path" placeholder="/media/Movies" style="width: 100%" required></div>
+  <div><label for="name">Name (optional)</label><input id="name" name="name" placeholder="Movies"></div>
+  <button class="primary">Add and scan</button>
+</form>
+{{end}}
+
+{{with .Data.Continue}}
+<h2>Continue watching</h2>
+<div class="grid">
+  {{range .}}
+  <a class="poster" href="/ui/items/{{.Item.ID}}">
+    <div class="art{{if eq .Item.Kind "episode"}} wide{{end}}">{{.Item.Title}}<img src="/api/v1/images/{{.Item.ID}}/{{if eq .Item.Kind "episode"}}still{{else}}poster{{end}}?w=320" alt="" loading="lazy" onerror="this.remove()"></div>
+    <div class="t">{{.Item.Title}}{{if eq .Item.Kind "episode"}} <span class="quiet">{{code .Item.SeasonNumber .Item.EpisodeNumber}}</span>{{end}}</div>
+    <div class="quiet" style="font-size: 12px">{{.Reason}}</div>
+  </a>
+  {{end}}
+</div>
+{{end}}
+
+{{with .Data.Recent}}
+<h2>Recently added</h2>
+<div class="grid">
+  {{range .}}
+  <a class="poster" href="/ui/items/{{.ID}}">
+    <div class="art">{{.Title}}<img src="/api/v1/images/{{.ID}}/poster?w=240" alt="" loading="lazy" onerror="this.remove()"></div>
+    <div class="t">{{.Title}}{{if .Year}} <span class="quiet">({{.Year}})</span>{{end}}</div>
+  </a>
+  {{end}}
+</div>
+{{end}}
+{{template "bottom"}}{{end}}

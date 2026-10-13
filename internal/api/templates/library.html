@@ -1,0 +1,81 @@
+{{define "library.html"}}{{template "top" .}}
+{{$lib := .Data.Library}}{{$st := .Data.Stats}}
+<p><a href="/">← Libraries</a></p>
+<h1>{{$lib.Name}}</h1>
+<p class="quiet"><span class="mono">{{$lib.Path}}</span> · {{if eq $lib.Kind "tv"}}{{$st.Shows}} shows, {{$st.Episodes}} episodes{{else}}{{$st.Movies}} movies{{end}} · {{$st.Files}} files · last scan {{date $lib.LastScanAt}}</p>
+{{with .Data.Scan}}{{if .Running}}<div class="msg warn">Scanning ({{.Phase}}): {{.FilesSeen}} files found{{if .ToProbe}}, {{.Probed}} of {{.ToProbe}} new or changed files read{{end}}.{{if .Disk}} Library is on {{if eq .Disk "SSD"}}an{{else}}a{{end}} {{.Disk}}, reading {{.Workers}} files at a time.{{end}}</div>{{end}}{{end}}
+
+<div class="tabs">
+  <a href="/ui/libraries/{{$lib.ID}}" {{if not .Data.Tab}}class="on"{{end}}>{{if eq $lib.Kind "tv"}}Shows{{else}}Movies{{end}}</a>
+  <a href="/ui/libraries/{{$lib.ID}}?tab=review" {{if eq .Data.Tab "review"}}class="on"{{end}}>Needs a look ({{$st.Unmatched}})</a>
+  <a href="/ui/libraries/{{$lib.ID}}?tab=files" {{if eq .Data.Tab "files"}}class="on"{{end}}>File problems ({{add $st.ProbeErrors $st.Unplaced}})</a>
+</div>
+
+{{if eq .Data.Tab "review"}}
+  {{with .Data.Unmatched}}
+  <p class="quiet">These couldn't be matched with confidence. Find the title on themoviedb.org and paste the number from its address (for example 603 from themoviedb.org/movie/603).</p>
+  <div class="card table-wrap"><table>
+    <tr><th>Title from file names</th><th>Year</th><th>Best score</th><th>Fix</th></tr>
+    {{range .}}
+    <tr>
+      <td><a href="/ui/items/{{.ID}}">{{.Title}}</a></td>
+      <td>{{if .Year}}{{.Year}}{{else}}<span class="quiet">-</span>{{end}}</td>
+      <td>{{percent .MatchConfidence}}</td>
+      <td>{{if $.User.IsAdmin}}<form class="row" method="post" action="/ui/items/{{.ID}}/match">
+        <input name="tmdbId" inputmode="numeric" placeholder="TMDB ID" aria-label="TMDB ID for {{.Title}}" size="9">
+        <button>Match</button></form>{{end}}</td>
+    </tr>
+    {{end}}
+  </table></div>
+  {{else}}<p class="quiet">Nothing needs a look.</p>{{end}}
+
+{{else if eq .Data.Tab "files"}}
+  <h2>Files Kinora couldn't place</h2>
+  {{with .Data.Unplaced}}
+  <p class="quiet">In a TV library, every file needs a season and episode number, like <code>Show/Season 1/Show - S01E02.mkv</code>.</p>
+  <div class="card table-wrap"><table>
+    <tr><th>File</th><th>Why</th><th>Size</th></tr>
+    {{range .}}<tr><td class="mono">{{.RelPath}}</td><td>{{.Reason}}</td><td>{{size .Size}}</td></tr>{{end}}
+  </table></div>
+  {{else}}<p class="quiet">None.</p>{{end}}
+  <h2>Files ffprobe couldn't read</h2>
+  {{with .Data.ProbeErrors}}
+  <div class="card table-wrap"><table>
+    <tr><th>File</th><th>Error</th></tr>
+    {{range .}}<tr><td class="mono">{{.RelPath}}</td><td class="quiet">{{.ProbeError}}</td></tr>{{end}}
+  </table></div>
+  {{else}}<p class="quiet">None.</p>{{end}}
+
+{{else}}
+  <div class="row" style="margin-bottom: 16px">
+    <span class="quiet">Sort:</span>
+    <a href="/ui/libraries/{{$lib.ID}}">Title</a>
+    <a href="/ui/libraries/{{$lib.ID}}?sort=added">Recently added</a>
+    <a href="/ui/libraries/{{$lib.ID}}?sort=year">Year</a>
+  </div>
+  {{with .Data.Items}}
+  <div class="grid">
+    {{range .}}
+    <a class="poster" href="/ui/items/{{.ID}}">
+      <div class="art">{{.Title}}<img src="/api/v1/images/{{.ID}}/poster?w=240" alt="" loading="lazy" onerror="this.remove()"></div>
+      <div class="t">{{.Title}}{{if .Year}} <span class="quiet">({{.Year}})</span>{{end}}</div>
+      {{if eq .MatchState "unmatched"}}<span class="badge warn">unmatched</span>{{else if eq .MatchState "pending"}}<span class="badge">not matched yet</span>{{end}}
+    </a>
+    {{end}}
+  </div>
+  <div class="row" style="margin-top: 24px">
+    {{if $.Data.Page}}<a class="button" href="/ui/libraries/{{$lib.ID}}?page={{sub $.Data.Page 1}}&sort={{$.Data.Sort}}">← Previous</a>{{end}}
+    {{if $.Data.HasNext}}<a class="button" href="/ui/libraries/{{$lib.ID}}?page={{add $.Data.Page 1}}&sort={{$.Data.Sort}}">Next →</a>{{end}}
+  </div>
+  {{else}}<p class="quiet">Nothing here yet. If a scan is running, this page refreshes on its own.</p>{{end}}
+{{end}}
+
+{{if .User.IsAdmin}}
+<h2>Manage</h2>
+<div class="row">
+  <form class="inline" method="post" action="/ui/libraries/{{$lib.ID}}/scan"><button>Scan now</button></form>
+  <form class="inline" method="post" action="/ui/libraries/{{$lib.ID}}/rematch"><button>Retry unmatched</button></form>
+  <form class="inline" method="post" action="/ui/libraries/{{$lib.ID}}/delete" onsubmit="return confirm('Remove this library from Kinora? Your files are not touched.')"><button class="danger">Remove library</button></form>
+</div>
+{{end}}
+{{template "bottom"}}{{end}}
