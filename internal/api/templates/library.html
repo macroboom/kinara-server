@@ -2,7 +2,7 @@
 {{$lib := .Data.Library}}{{$st := .Data.Stats}}
 <p><a href="/">← Libraries</a></p>
 <h1>{{$lib.Name}}</h1>
-<p class="quiet"><span class="mono">{{$lib.Path}}</span> · {{if eq $lib.Kind "tv"}}{{$st.Shows}} shows, {{$st.Episodes}} episodes{{else}}{{$st.Movies}} movies{{end}} · {{$st.Files}} files · last scan {{date $lib.LastScanAt}}</p>
+<p class="quiet"><span class="mono">{{range $i, $f := $lib.Folders}}{{if $i}}, {{end}}{{$f}}{{else}}{{$lib.Path}}{{end}}</span> · {{if eq $lib.Kind "tv"}}{{$st.Shows}} shows, {{$st.Episodes}} episodes{{else}}{{$st.Movies}} movies{{end}} · {{$st.Files}} files · last scan {{date $lib.LastScanAt}}</p>
 {{with .Data.Scan}}{{if .Running}}<div class="msg warn">Scanning ({{.Phase}}): {{.FilesSeen}} files found{{if .ToProbe}}, {{.Probed}} of {{.ToProbe}} new or changed files read{{end}}.{{if .Disk}} Library is on {{if eq .Disk "SSD"}}an{{else}}a{{end}} {{.Disk}}, reading {{.Workers}} files at a time.{{end}}</div>{{end}}{{end}}
 
 <div class="tabs">

@@ -106,3 +106,85 @@ func (s *Store) ExpireSessions(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, qExpireSessions, now())
 	return err
 }
+
+// AccountCard is how an account appears on the sign-in screen's picker.
+type AccountCard struct {
+	Username string `json:"username"`
+	// Color is the account's first profile's colour, for its avatar.
+	Color string `json:"color"`
+}
+
+// ListUsers returns every account, oldest first (for the manager page).
+func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, username, password_hash, is_admin, created_at FROM users ORDER BY created_at, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []User{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// AccountCards lists accounts for the sign-in picker: name and colour only.
+func (s *Store) AccountCards(ctx context.Context) ([]AccountCard, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT u.username,
+		COALESCE((SELECT p.color FROM profiles p WHERE p.user_id = u.id ORDER BY p.id LIMIT 1), ?)
+		FROM users u ORDER BY u.created_at, u.id`, DefaultProfileColor)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AccountCard{}
+	for rows.Next() {
+		var c AccountCard
+		if err := rows.Scan(&c.Username, &c.Color); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// SetAdmin changes whether an account can manage the server.
+func (s *Store) SetAdmin(ctx context.Context, userID int64, admin bool) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET is_admin = ? WHERE id = ?`, boolInt(admin), userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// CountAdmins counts accounts that can manage the server.
+func (s *Store) CountAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE is_admin = 1`).Scan(&n)
+	return n, err
+}
+
+// DeleteUser removes an account with its profiles, sessions and history.
+func (s *Store) DeleteUser(ctx context.Context, userID int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteUserSessions signs an account out everywhere (after a password change).
+func (s *Store) DeleteUserSessions(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
+	return err
+}

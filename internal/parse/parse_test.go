@@ -163,6 +163,25 @@ func TestParse(t *testing.T) {
 		// Windows separators.
 		{`Night Shift (2023)\Night Shift (2023).mkv`,
 			Result{Kind: Movie, Title: "Night Shift", Year: 2023}},
+		// Edition labels are not part of the title.
+		{"The Hobbit- An Unexpected Journey (Theatrical) (2012)/The Hobbit- An Unexpected Journey (Theatrical) (2012).mkv",
+			Result{Kind: Movie, Title: "The Hobbit- An Unexpected Journey", Year: 2012}},
+		{"Blade Runner (Final Cut) (1982).mkv",
+			Result{Kind: Movie, Title: "Blade Runner", Year: 1982}},
+		{"Aliens (1986) (Special Edition).mkv",
+			Result{Kind: Movie, Title: "Aliens", Year: 1986}},
+		{"(500) Days of Summer (2009).mkv",
+			Result{Kind: Movie, Title: "(500) Days of Summer", Year: 2009}},
+		// A trailer or preview saved beside the film.
+		{"The Hobbit (2012)/The Hobbit- An Unexpected Journey (Theatrical) preview.mkv",
+			Result{Kind: Movie, Title: "The Hobbit- An Unexpected Journey preview", Extra: true}},
+		{"Dune (2021)/Dune.Trailer.2.mkv",
+			Result{Kind: Movie, Title: "Dune Trailer 2", Extra: true}},
+		{"Preview (2019).mkv",
+			Result{Kind: Movie, Title: "Preview", Year: 2019}},
+		// ...but an episode can be called that.
+		{"Show/Season 1/Show - S01E05 - The Preview.mkv",
+			Result{Kind: Episode, Title: "Show", Season: 1, Episode: 5, EpisodeEnd: 5}},
 	}
 
 	for _, c := range cases {
@@ -194,6 +213,10 @@ func TestNormalize(t *testing.T) {
 		"I'm Sorry":       "im sorry",
 		"Im Sorry":        "im sorry",
 		"The":             "the",
+		"WALL·E":          "wall e",
+		"WALL-E":          "wall e",
+		"Spider–Man":      "spider man",
+		"千と千尋の神隠し":        "千と千尋の神隠し",
 	} {
 		if got := Normalize(in); got != want {
 			t.Errorf("Normalize(%q) = %q, want %q", in, got, want)

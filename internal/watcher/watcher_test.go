@@ -221,7 +221,42 @@ func TestRootAddedAndRemoved(t *testing.T) {
 	h.wantFired(0) // new root only baselines
 	h.roots = h.roots[:1]
 	h.poll(time.Minute)
-	if _, ok := h.w.states[2]; ok {
+	if _, ok := h.w.states[Root{2, d2}]; ok {
 		t.Fatal("removed root state not dropped")
+	}
+}
+
+// A library with two folders: each is watched on its own, a change in either
+// fires the library, and a folder added later only baselines.
+func TestLibraryWithTwoFolders(t *testing.T) {
+	d1, d2, d3 := t.TempDir(), t.TempDir(), t.TempDir()
+	h := newHarness(t, Root{7, d1}, Root{7, d2})
+	old := h.clock.Add(-time.Hour)
+	write(t, filepath.Join(d1, "a.mkv"), 1, old)
+	write(t, filepath.Join(d2, "b.mkv"), 1, old)
+	write(t, filepath.Join(d3, "c.mkv"), 1, old)
+	h.poll(0)
+	if len(h.w.states) != 2 {
+		t.Fatalf("states %d, want 2", len(h.w.states))
+	}
+	h.roots = append(h.roots, Root{7, d3})
+	for i := 0; i < 4; i++ {
+		h.poll(time.Minute)
+	}
+	h.wantFired(0)
+	write(t, filepath.Join(d2, "d.mkv"), 1, old)
+	for i := 0; i < 4; i++ {
+		h.poll(time.Minute)
+	}
+	if len(h.fired) != 1 || h.fired[0] != 7 {
+		t.Fatalf("fired %v, want [7]", h.fired)
+	}
+	h.roots = h.roots[:2]
+	h.poll(time.Minute)
+	if _, ok := h.w.states[Root{7, d3}]; ok {
+		t.Fatal("removed folder state not dropped")
+	}
+	if _, ok := h.w.states[Root{7, d1}]; !ok {
+		t.Fatal("other folder state dropped")
 	}
 }

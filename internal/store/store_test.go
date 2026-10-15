@@ -157,6 +157,10 @@ func TestProfilesFiltersAndCast(t *testing.T) {
 		if err := s.CreateItem(ctx, &it); err != nil {
 			t.Fatal(err)
 		}
+		// Runtimes come from matching, not from creating the item.
+		if err := s.UpdateItemMetadata(ctx, it); err != nil {
+			t.Fatal(err)
+		}
 		v := Version{LibraryID: lib.ID, ItemID: it.ID, Path: "/movies/" + title + ".mkv", RelPath: title + ".mkv",
 			Size: 1, Height: height, HDR: hdr}
 		if err := s.SaveVersion(ctx, &v, nil); err != nil {

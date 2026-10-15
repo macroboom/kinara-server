@@ -135,7 +135,9 @@ func (s *Service) Continue(ctx context.Context, profileID int64, limit int) ([]C
 		}
 		switch it.Kind {
 		case store.ItemMovie:
-			if w.PositionSec >= MinProgressSec && !w.Completed {
+			// A finished movie's position goes back to 0, so a position
+			// here is a first watch or a rewatch under way.
+			if w.PositionSec >= MovieStartedSec {
 				out = append(out, ContinueEntry{Item: it, PositionSec: w.PositionSec,
 					InProgress: true, Reason: "Pick up where you left off", LastPlayed: w.LastPlayedAt})
 			}

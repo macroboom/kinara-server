@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -19,12 +20,33 @@ import (
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	n, err := s.Store.CountUsers(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{
+	// The computer's name, so apps that find the server on the network can
+	// show "HOME-PC" rather than an address.
+	host, _ := os.Hostname()
+	resp := map[string]any{
 		"ok":        err == nil,
+		"product":   "kinora",
+		"name":      host,
 		"version":   s.Version,
 		"setupDone": n > 0,
 		"metadata":  s.Matcher != nil,
-	})
+	}
+	if s.Remote != nil {
+		resp["remote"] = remoteSummary(s.Remote.Info())
+	}
+	// The server's cloud ID lets an app confirm a direct or relay address
+	// reached the server it meant (it's in those addresses anyway).
+	if s.Cloud != nil {
+		if st := s.Cloud.State(); st != nil {
+			resp["serverId"] = st.ServerID
+		}
+	}
+	if err != nil {
+		// Say why, here and in the server's log, rather than just "not ok".
+		s.Log.Error("health check: database not answering", "err", err)
+		resp["error"] = "database: " + err.Error()
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // --- Auth ---
@@ -69,9 +91,19 @@ func (s *Server) signIn(r *http.Request, username, password, device string) (str
 	if err := s.limiter.Allow(keys...); err != nil {
 		return "", store.User{}, err
 	}
+	// Remote sign-ins also share one allowance (see tunnelLimiter).
+	remoteDevice := fromInternet(r)
+	if remoteDevice {
+		if err := s.tunnelLimiter.Allow("all"); err != nil {
+			return "", store.User{}, err
+		}
+	}
 	u, err := s.Store.UserByName(r.Context(), username)
 	if err != nil || !auth.CheckPassword(u.PasswordHash, password) {
 		s.limiter.Fail(keys...)
+		if remoteDevice {
+			s.tunnelLimiter.Fail("all")
+		}
 		return "", store.User{}, errBadLogin
 	}
 	s.limiter.Reset(keys...)
@@ -85,6 +117,7 @@ func (s *Server) signIn(r *http.Request, username, password, device string) (str
 	if err := s.Store.CreateSession(r.Context(), hash, u.ID, device, time.Now().Add(sessionTTL).Unix()); err != nil {
 		return "", store.User{}, err
 	}
+	s.noteNode(r, hash)
 	return token, u, nil
 }
 
@@ -140,23 +173,76 @@ type createLibraryRequest struct {
 	Kind string `json:"kind"`
 }
 
+// maxLibraryName caps library names so they fit on a tab or a TV row.
+const maxLibraryName = 80
+
+// checkFolder cleans a folder path from a request and makes sure it exists
+// and doesn't overlap a folder any library already has: the same folder,
+// one inside it, or one around it would list the same files twice.
+func (s *Server) checkFolder(r *http.Request, raw string) (string, error) {
+	path := filepath.Clean(strings.TrimSpace(raw))
+	if strings.TrimSpace(raw) == "" || !filepath.IsAbs(path) {
+		return "", errors.New("path must be an absolute folder path")
+	}
+	if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
+		return "", errors.New("folder not found or not readable: " + path)
+	}
+	libs, err := s.Store.ListLibraries(r.Context())
+	if err != nil {
+		return "", err
+	}
+	for _, l := range libs {
+		for _, f := range l.Folders {
+			switch {
+			case samePath(path, f):
+				return "", fmt.Errorf("that folder is already in %q", l.Name)
+			case insidePath(path, f):
+				return "", fmt.Errorf("that folder is inside %s, which %q already covers", f, l.Name)
+			case insidePath(f, path):
+				return "", fmt.Errorf("that folder contains %s, which is already in %q. Folders can't overlap", f, l.Name)
+			}
+		}
+	}
+	return path, nil
+}
+
+// samePath compares folder paths, ignoring case on Windows.
+func samePath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// insidePath reports whether a is a folder somewhere under b.
+func insidePath(a, b string) bool {
+	prefix := b
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix += string(filepath.Separator)
+	}
+	if len(a) <= len(prefix) {
+		return false
+	}
+	return samePath(a[:len(prefix)], prefix)
+}
+
 // addLibrary validates and creates a library, then starts its first scan.
 func (s *Server) addLibrary(r *http.Request, req createLibraryRequest) (store.Library, error) {
-	req.Path = filepath.Clean(strings.TrimSpace(req.Path))
 	req.Name = strings.TrimSpace(req.Name)
-	if req.Kind != store.KindMovies && req.Kind != store.KindTV {
-		return store.Library{}, errors.New(`kind must be "movies" or "tv"`)
+	if req.Kind != store.KindMovies && req.Kind != store.KindTV && req.Kind != store.KindOther {
+		return store.Library{}, errors.New(`kind must be "movies", "tv" or "other"`)
 	}
-	if !filepath.IsAbs(req.Path) {
-		return store.Library{}, errors.New("path must be an absolute folder path")
-	}
-	if fi, err := os.Stat(req.Path); err != nil || !fi.IsDir() {
-		return store.Library{}, errors.New("folder not found or not readable: " + req.Path)
+	path, err := s.checkFolder(r, req.Path)
+	if err != nil {
+		return store.Library{}, err
 	}
 	if req.Name == "" {
-		req.Name = filepath.Base(req.Path)
+		req.Name = filepath.Base(path)
 	}
-	lib, err := s.Store.CreateLibrary(r.Context(), req.Name, req.Path, req.Kind)
+	if len([]rune(req.Name)) > maxLibraryName {
+		return store.Library{}, fmt.Errorf("keep the name under %d characters", maxLibraryName)
+	}
+	lib, err := s.Store.CreateLibrary(r.Context(), req.Name, path, req.Kind)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return lib, errors.New("that folder is already a library")
@@ -201,6 +287,155 @@ func (s *Server) deleteLibrary(w http.ResponseWriter, r *http.Request, u store.U
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// libraryView builds one library's view, for replies to edits.
+func (s *Server) libraryView(r *http.Request, id int64) (libraryView, error) {
+	l, err := s.Store.GetLibrary(r.Context(), id)
+	if err != nil {
+		return libraryView{}, err
+	}
+	st, err := s.Store.LibraryStats(r.Context(), id)
+	if err != nil {
+		return libraryView{}, err
+	}
+	v := libraryView{Library: l, Stats: st}
+	if p, ok := s.Scanner.Progress(id); ok {
+		v.Scan = &p
+	}
+	return v, nil
+}
+
+type updateLibraryRequest struct {
+	Name *string `json:"name"`
+}
+
+// updateLibrary renames a library. (Kind can't change: the titles in it
+// were matched as movies or shows.)
+func (s *Server) updateLibrary(w http.ResponseWriter, r *http.Request, u store.User) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad library id")
+		return
+	}
+	var req updateLibraryRequest
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			writeErr(w, http.StatusBadRequest, "the name can't be empty")
+			return
+		}
+		if len([]rune(name)) > maxLibraryName {
+			writeErr(w, http.StatusBadRequest, fmt.Sprintf("keep the name under %d characters", maxLibraryName))
+			return
+		}
+		if err := s.Store.RenameLibrary(r.Context(), id, name); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeErr(w, http.StatusNotFound, "library not found")
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	v, err := s.libraryView(r, id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "library not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+type folderRequest struct {
+	Path string `json:"path"`
+}
+
+// addLibraryFolder adds a folder to a library and scans it. If a scan is
+// running, another follows it.
+func (s *Server) addLibraryFolder(w http.ResponseWriter, r *http.Request, u store.User) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad library id")
+		return
+	}
+	if _, err := s.Store.GetLibrary(r.Context(), id); err != nil {
+		writeErr(w, http.StatusNotFound, "library not found")
+		return
+	}
+	var req folderRequest
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	path, err := s.checkFolder(r, req.Path)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.Store.AddLibraryFolder(r.Context(), id, path); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			writeErr(w, http.StatusBadRequest, "that folder is already in a library")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = s.Scanner.Queue(s.BaseCtx, id)
+	v, err := s.libraryView(r, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+
+// removeLibraryFolder takes a folder out of a library. Kinara forgets the
+// files in it; nothing on disk is touched. The folder is named by the path
+// query parameter, exactly as the library lists it.
+func (s *Server) removeLibraryFolder(w http.ResponseWriter, r *http.Request, u store.User) {
+	id, ok := pathID(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad library id")
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if p, _ := s.Scanner.Progress(id); p.Running {
+		writeErr(w, http.StatusConflict, "wait for the scan to finish")
+		return
+	}
+	removed, err := s.Store.RemoveLibraryFolder(r.Context(), id, path)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, "that folder isn't part of this library")
+		return
+	case errors.Is(err, store.ErrLastFolder):
+		writeErr(w, http.StatusBadRequest, "that's the library's only folder. Remove the library instead")
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	v, err := s.libraryView(r, id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		libraryView
+		RemovedFiles int64 `json:"removedFiles"`
+	}{v, removed})
 }
 
 func (s *Server) startScan(w http.ResponseWriter, r *http.Request, rematch bool) {
@@ -324,6 +559,11 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request, u store.User) {
 			if show, err := s.Store.GetItem(r.Context(), season.ParentID); err == nil {
 				resp["show"] = viewOf(show, nil)
 			}
+		}
+	}
+	if it.Kind == store.ItemMovie || it.Kind == store.ItemShow {
+		if lists, err := s.Store.ListsWith(r.Context(), u.ProfileID, it.ID); err == nil {
+			resp["lists"] = lists
 		}
 	}
 	if it.Kind != store.ItemSeason {
@@ -500,7 +740,19 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request, u store.User) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"continueWatching": cont, "recentlyAdded": recentViews, "genres": genres})
+	// The profile's My List, newest first (a row on Home when it has anything).
+	myList := []ItemView{}
+	if id, err := s.Store.DefaultList(r.Context(), u.ProfileID); err == nil {
+		if items, err := s.Store.ItemsInList(r.Context(), u.ProfileID, id); err == nil {
+			if len(items) > 20 {
+				items = items[:20]
+			}
+			if v, err := s.views(r.Context(), u.ProfileID, items); err == nil {
+				myList = v
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"continueWatching": cont, "recentlyAdded": recentViews, "genres": genres, "myList": myList})
 }
 
 type progressRequest struct {
@@ -543,6 +795,22 @@ func (s *Server) reportProgress(w http.ResponseWriter, r *http.Request, u store.
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// A live report (not one queued while offline) says what's playing now.
+	if req.ClientTime == 0 || time.Since(time.Unix(req.ClientTime, 0)) < playingFor {
+		title := it.Title
+		if it.Kind == store.ItemEpisode {
+			if showID, err := s.Store.ShowOfEpisode(r.Context(), it.ID); err == nil {
+				if show, err := s.Store.GetItem(r.Context(), showID); err == nil {
+					title = fmt.Sprintf("%s · S%dE%d %s", show.Title, it.SeasonNumber, it.EpisodeNumber, it.Title)
+				}
+			}
+		}
+		versionID := req.VersionID
+		if versionID == "" && len(versions) > 0 {
+			versionID = versions[0].ID
+		}
+		s.notePlay(r, u, it, versionID, title, req.PositionSec, duration)
 	}
 	writeJSON(w, http.StatusOK, st)
 }
@@ -608,6 +876,28 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, u store.User) {
 	step("sending")
 	http.ServeContent(w, r, filepath.Base(v.Path), fi.ModTime(), content)
 	step("finished")
+}
+
+// imageColor answers the dominant colour of an item's artwork, for tinting
+// the app's chrome to match it: {"color":"#rrggbb"}, or "" for grey art.
+func (s *Server) imageColor(w http.ResponseWriter, r *http.Request, u store.User) {
+	kind := r.PathValue("kind")
+	if kind != "poster" && kind != "backdrop" && kind != "still" {
+		writeErr(w, http.StatusBadRequest, "kind must be poster, backdrop or still")
+		return
+	}
+	src, err := s.imageSource(r, r.PathValue("id"), kind)
+	if err != nil || src == "" {
+		writeJSON(w, http.StatusOK, map[string]string{"color": ""})
+		return
+	}
+	col, err := s.Images.Color(r.Context(), src)
+	if err != nil {
+		s.Log.Warn("image color", "src", src, "err", err)
+		col = ""
+	}
+	w.Header().Set("Cache-Control", "private, max-age=604800")
+	writeJSON(w, http.StatusOK, map[string]string{"color": col})
 }
 
 // plainReader exposes only Read and Seek, so the HTTP server can't use

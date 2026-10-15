@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kinora-tunnel",
+    "crates/kinora-iroh",
+    "crates/kinora-connect",
+    "crates/kinora-testserver",
+    "crates/kinora-e2e",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+kinora-tunnel = { path = "crates/kinora-tunnel" }
+kinora-testserver = { path = "crates/kinora-testserver" }
+
+# iroh is pinned exactly: its API moves between minor releases and we use the
+# unstable net report types, which are outside semver.
+iroh = { version = "=1.3.0", features = ["unstable-net-report"] }
+iroh-tickets = "=1.0.0"
+iroh-mdns-address-lookup = "=0.6.0"
+
+anyhow = "1"
+bytes = "1"
+clap = { version = "4.5", features = ["derive", "env"] }
+futures-util = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

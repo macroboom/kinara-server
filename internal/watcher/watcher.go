@@ -51,7 +51,8 @@ var skippedDirs = map[string]bool{
 	"@eadir":                    true,
 }
 
-// Root is one library folder to watch.
+// Root is one library folder to watch. A library with several folders has
+// one Root per folder; each is polled and settled on its own.
 type Root struct {
 	LibraryID int64
 	Path      string
@@ -92,10 +93,10 @@ type Watcher struct {
 
 	// now is the clock; nil means time.Now. Tests replace it.
 	now    func() time.Time
-	states map[int64]*rootState
+	states map[Root]*rootState
 }
 
-// rootState is the watcher's memory about one library.
+// rootState is the watcher's memory about one library folder.
 type rootState struct {
 	path        string
 	snap        snapshot // nil until the baseline is taken
@@ -165,7 +166,7 @@ func (w *Watcher) Run(ctx context.Context) {
 // pollOnce performs one poll of every current root.
 func (w *Watcher) pollOnce(ctx context.Context) {
 	if w.states == nil {
-		w.states = make(map[int64]*rootState)
+		w.states = make(map[Root]*rootState)
 	}
 	log := w.logger()
 	if w.Roots == nil {
@@ -179,13 +180,13 @@ func (w *Watcher) pollOnce(ctx context.Context) {
 		return
 	}
 
-	live := make(map[int64]bool, len(roots))
+	live := make(map[Root]bool, len(roots))
 	for _, r := range roots {
-		live[r.LibraryID] = true
+		live[r] = true
 	}
-	for id := range w.states {
-		if !live[id] {
-			delete(w.states, id)
+	for r := range w.states {
+		if !live[r] {
+			delete(w.states, r)
 		}
 	}
 
@@ -199,10 +200,10 @@ func (w *Watcher) pollOnce(ctx context.Context) {
 
 func (w *Watcher) pollRoot(ctx context.Context, r Root) {
 	log := w.logger()
-	st := w.states[r.LibraryID]
-	if st == nil || st.path != r.Path {
+	st := w.states[r]
+	if st == nil {
 		st = &rootState{path: r.Path}
-		w.states[r.LibraryID] = st
+		w.states[r] = st
 	}
 
 	start := time.Now()

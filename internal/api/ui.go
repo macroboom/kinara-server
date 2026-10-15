@@ -150,6 +150,10 @@ func (s *Server) uiHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n == 0 {
+		if fromInternet(r) {
+			http.Error(w, "This server isn't set up yet. Set it up on its home network first.", http.StatusForbidden)
+			return
+		}
 		s.render(w, "setup.html", page{Title: "Set up Kinora", Error: r.URL.Query().Get("err")})
 		return
 	}
@@ -189,6 +193,11 @@ func (s *Server) uiSetup(w http.ResponseWriter, r *http.Request) {
 	n, err := s.Store.CountUsers(r.Context())
 	if err != nil || n > 0 {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	// Never from outside: whoever makes the first account owns the server.
+	if fromInternet(r) {
+		http.Error(w, "Set the server up on its home network.", http.StatusForbidden)
 		return
 	}
 	user := strings.TrimSpace(r.FormValue("username"))
@@ -343,6 +352,8 @@ func (s *Server) uiLibrary(w http.ResponseWriter, r *http.Request, u store.User)
 		sort := r.URL.Query().Get("sort")
 		items, err := s.Store.ListItems(r.Context(), store.ItemFilter{
 			LibraryID: id, Kind: kind, Sort: sort, Limit: uiPageSize + 1, Offset: pageNum * uiPageSize,
+			// The owner's check page lists everything, matched or not.
+			IncludeUnmatched: true,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

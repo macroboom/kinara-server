@@ -35,6 +35,14 @@ func HashPassword(password string) (string, error) {
 	if len(password) < MinPasswordLength {
 		return "", ErrWeakPassword
 	}
+	return hash(password)
+}
+
+// HashPIN hashes a profile PIN the same way. A PIN is short by design (the
+// API checks it's 4 digits), so the password length rule doesn't apply.
+func HashPIN(pin string) (string, error) { return hash(pin) }
+
+func hash(password string) (string, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err

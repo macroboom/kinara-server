@@ -68,7 +68,7 @@ func (s *Scanner) inferEpisodes(ctx context.Context, lib store.Library) (int, er
 		if !ok {
 			continue
 		}
-		itemID, err := s.place(ctx, lib, p)
+		itemID, err := s.place(ctx, lib, p, v.RelPath)
 		if err != nil {
 			return placed, err
 		}

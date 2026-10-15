@@ -30,12 +30,23 @@ const availableSQL = `(
 
 // Libraries.
 const (
-	qInsertLibrary     = `INSERT INTO libraries (name, path, kind, created_at) VALUES (?, ?, ?, ?)`
-	qListLibraries     = `SELECT id, name, path, kind, created_at, COALESCE(last_scan_at, 0) FROM libraries ORDER BY name`
-	qGetLibrary        = `SELECT id, name, path, kind, created_at, COALESCE(last_scan_at, 0) FROM libraries WHERE id = ?`
+	qInsertLibrary     = `INSERT INTO libraries (name, path, kind, plain, created_at) VALUES (?, ?, ?, ?, ?)`
+	libraryCols        = `id, name, path, CASE WHEN plain = 1 THEN 'other' ELSE kind END, created_at, COALESCE(last_scan_at, 0)`
+	qListLibraries     = `SELECT ` + libraryCols + ` FROM libraries ORDER BY name`
+	qGetLibrary        = `SELECT ` + libraryCols + ` FROM libraries WHERE id = ?`
 	qDeleteLibrary     = `DELETE FROM libraries WHERE id = ?`
 	qSetLibraryScanned = `UPDATE libraries SET last_scan_at = ? WHERE id = ?`
-	qLibraryStats      = `SELECT
+	qRenameLibrary     = `UPDATE libraries SET name = ? WHERE id = ?`
+	qInsertFolder      = `INSERT INTO library_folders (library_id, path, added_at) VALUES (?, ?, ?)`
+	qAllFolders        = `SELECT library_id, path FROM library_folders ORDER BY library_id, added_at, path`
+	qLibraryFolders    = `SELECT path FROM library_folders WHERE library_id = ? ORDER BY added_at, path`
+	qDeleteFolder      = `DELETE FROM library_folders WHERE library_id = ? AND path = ?`
+	qDeleteLibFolders  = `DELETE FROM library_folders WHERE library_id = ?`
+	// Files under a folder, given folder + separator. substr rather than
+	// LIKE, so % and _ in folder names match only themselves.
+	qDeleteFolderVersions = `DELETE FROM versions WHERE library_id = ? AND substr(path, 1, length(?)) = ?`
+	qFirstFolderAsPath    = `UPDATE libraries SET path = (SELECT path FROM library_folders WHERE library_id = ? ORDER BY added_at, path LIMIT 1) WHERE id = ?`
+	qLibraryStats         = `SELECT
 		(SELECT COUNT(*) FROM items WHERE library_id = ? AND kind = 'movie'),
 		(SELECT COUNT(*) FROM items WHERE library_id = ? AND kind = 'show'),
 		(SELECT COUNT(*) FROM items WHERE library_id = ? AND kind = 'episode'),

@@ -35,7 +35,8 @@ type Cache struct {
 	Dir  string
 	HTTP *http.Client
 
-	locks sync.Map // key -> *sync.Mutex
+	locks  sync.Map // key -> *sync.Mutex
+	colors sync.Map // source URL -> dominant colour (see Color)
 }
 
 // New returns a cache rooted at dir.
@@ -138,6 +139,19 @@ func sources(srcURL string, width int) []string {
 }
 
 func (c *Cache) download(ctx context.Context, url, dst string) error {
+	// A picture the server made itself (a frame from an "Other videos"
+	// file): copy it in like a download.
+	if path, ok := strings.CutPrefix(url, "file:"); ok {
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		return writeAtomic(dst, func(w io.Writer) error {
+			_, err := io.Copy(w, io.LimitReader(f, 50<<20))
+			return err
+		})
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

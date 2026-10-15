@@ -12,6 +12,9 @@ const (
 	// MinProgressSec: positions under this are not saved as "in progress",
 	// so sampling a title doesn't clutter Continue Watching.
 	MinProgressSec = 120
+	// MovieStartedSec: a movie joins Continue Watching once played this
+	// far. Lower than for episodes, which always have a next one to show.
+	MovieStartedSec = 30
 	// WatchedFraction: an item counts as watched past this share of its
 	// length. Credits markers will replace this later.
 	WatchedFraction = 0.92

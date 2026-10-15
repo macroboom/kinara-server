@@ -257,6 +257,9 @@ const (
 		AND (v.item_id = i.id OR v.item_id IN (` + showEpisodes + `)))`
 )
 
+// unmatchedSQL is a movie or show the matcher gave up on.
+const unmatchedSQL = `(i.kind IN ('movie', 'show') AND i.match_state = 'unmatched')`
+
 // itemWhere builds the WHERE conditions shared by listing and letter offsets.
 func itemWhere(f ItemFilter) ([]string, []any) {
 	var where []string
@@ -264,6 +267,14 @@ func itemWhere(f ItemFilter) ([]string, []any) {
 	if f.LibraryID != 0 {
 		where = append(where, "i.library_id = ?")
 		args = append(args, f.LibraryID)
+	} else if f.OnlyOther {
+		where = append(where, "(i.library_id IN (SELECT id FROM libraries WHERE plain = 1) OR "+unmatchedSQL+")")
+	} else if !f.IncludeOther {
+		where = append(where, "i.library_id NOT IN (SELECT id FROM libraries WHERE plain = 1)")
+	}
+	// Titles that didn't match live on the Other tab until they're fixed.
+	if !f.OnlyOther && !f.IncludeUnmatched && f.MatchState == "" {
+		where = append(where, "NOT "+unmatchedSQL)
 	}
 	if f.Kind != "" {
 		where = append(where, "i.kind = ?")

@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"errors"
 	"hash/fnv"
+	"io"
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -37,71 +39,20 @@ func (s *Server) transcodeStream(w http.ResponseWriter, r *http.Request, u store
 		writeErr(w, http.StatusNotImplemented, "converting is turned off on this server")
 		return
 	}
-	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
-	if err != nil || v.Missing {
-		writeErr(w, http.StatusNotFound, "file not found")
-		return
-	}
-	if _, err := os.Stat(v.Path); err != nil {
-		writeErr(w, http.StatusNotFound, "file not available")
-		return
-	}
-	streams, err := s.Store.Streams(r.Context(), v.ID)
+	req, v, status, err := s.transcodeRequest(r)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	q := r.URL.Query()
-	req := transcode.Request{
-		Path:       v.Path,
-		Video:      q.Get("video"),
-		AudioCodec: q.Get("audioCodec"),
-		HDR:        v.HDR,
-		Audio:      -1,
-	}
-	req.Start, _ = strconv.ParseFloat(q.Get("start"), 64)
-	if math.IsNaN(req.Start) || math.IsInf(req.Start, 0) {
-		req.Start = 0
-	}
-	req.MaxBitrate, _ = strconv.Atoi(q.Get("maxBitrate"))
-	req.MaxHeight, _ = strconv.Atoi(q.Get("maxHeight"))
-	if a := q.Get("audio"); a != "" {
-		idx, err := strconv.Atoi(a)
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, "bad audio index")
-			return
-		}
-		found := false
-		for _, st := range streams {
-			if st.Index == idx && st.Type == "audio" {
-				req.Audio, req.AudioChannels, found = idx, st.Channels, true
-			}
-		}
-		if !found {
-			writeErr(w, http.StatusBadRequest, "no audio track with that index")
-			return
-		}
-	} else {
-		for _, st := range streams {
-			if st.Type == "audio" {
-				req.AudioChannels = st.Channels
-				break
-			}
-		}
-	}
-	for _, st := range streams {
-		if st.Type == "subtitle" {
-			req.Subtitles = append(req.Subtitles, st)
-		}
-	}
-	if err := req.Validate(); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeErr(w, status, err.Error())
 		return
 	}
 	if s.Jobs != nil {
 		s.Jobs.Prioritize(v.ID)
 	}
-	w.Header().Set("Content-Type", "video/x-matroska")
+	req.Owner = s.streamOwner(r, v)
+	if req.Container == "mp4" {
+		w.Header().Set("Content-Type", "video/mp4")
+	} else {
+		w.Header().Set("Content-Type", "video/x-matroska")
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Accept-Ranges", "none")
 	// Headers go out with the first bytes ffmpeg writes, so an ffmpeg that
@@ -510,4 +461,278 @@ func (s *Server) tmdbImage(w http.ResponseWriter, r *http.Request, u store.User)
 	}
 	w.Header().Set("Cache-Control", "private, max-age=604800")
 	http.ServeFile(w, r, path)
+}
+
+// transcodeRequest builds a conversion from a request's query: the file
+// (path {id}, a version), the video and audio choices, and where to start.
+// On failure it returns the HTTP status to answer with.
+func (s *Server) transcodeRequest(r *http.Request) (transcode.Request, store.Version, int, error) {
+	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	if err != nil || v.Missing {
+		return transcode.Request{}, v, http.StatusNotFound, errors.New("file not found")
+	}
+	if _, err := os.Stat(v.Path); err != nil {
+		return transcode.Request{}, v, http.StatusNotFound, errors.New("file not available")
+	}
+	streams, err := s.Store.Streams(r.Context(), v.ID)
+	if err != nil {
+		return transcode.Request{}, v, http.StatusInternalServerError, err
+	}
+	q := r.URL.Query()
+	req := transcode.Request{
+		Path:        v.Path,
+		Video:       q.Get("video"),
+		AudioCodec:  q.Get("audioCodec"),
+		HDR:         v.HDR,
+		SourceCodec: v.VideoCodec,
+		Container:   q.Get("container"),
+		Audio:       -1,
+	}
+	req.Start, _ = strconv.ParseFloat(q.Get("start"), 64)
+	if math.IsNaN(req.Start) || math.IsInf(req.Start, 0) {
+		req.Start = 0
+	}
+	req.MaxBitrate, _ = strconv.Atoi(q.Get("maxBitrate"))
+	req.MaxHeight, _ = strconv.Atoi(q.Get("maxHeight"))
+	req.Segments = q.Get("segments")
+	req.MaxAudioChannels, _ = strconv.Atoi(q.Get("audioChannels"))
+	if a := q.Get("audio"); a != "" {
+		idx, err := strconv.Atoi(a)
+		if err != nil {
+			return req, v, http.StatusBadRequest, errors.New("bad audio index")
+		}
+		found := false
+		for _, st := range streams {
+			if st.Index == idx && st.Type == "audio" {
+				req.Audio, req.AudioChannels, found = idx, st.Channels, true
+			}
+		}
+		if !found {
+			return req, v, http.StatusBadRequest, errors.New("no audio track with that index")
+		}
+	} else {
+		for _, st := range streams {
+			if st.Type == "audio" {
+				req.AudioChannels = st.Channels
+				break
+			}
+		}
+	}
+	for _, st := range streams {
+		if st.Type == "subtitle" {
+			req.Subtitles = append(req.Subtitles, st)
+		}
+	}
+	if req.Container != "hls" {
+		if err := req.Validate(); err != nil {
+			return req, v, http.StatusBadRequest, err
+		}
+	}
+	return req, v, 0, nil
+}
+
+// hlsStart begins an HLS conversion of a file (for iPhones and Safari) and
+// answers with its playlist URL once the first segment is ready.
+func (s *Server) hlsStart(w http.ResponseWriter, r *http.Request, u store.User) {
+	if s.HLS == nil {
+		writeErr(w, http.StatusNotImplemented, "converting is turned off on this server")
+		return
+	}
+	req, v, status, err := s.transcodeRequest(r)
+	if err != nil {
+		writeErr(w, status, err.Error())
+		return
+	}
+	if s.Jobs != nil {
+		s.Jobs.Prioritize(v.ID)
+	}
+	req.Owner = s.streamOwner(r, v)
+	id, err := s.HLS.Start(r.Context(), req)
+	if err != nil && !errors.Is(err, transcode.ErrBusy) && r.Context().Err() == nil && s.Transcoder.UsesGPUDecode(req) {
+		// The all-GPU pipeline can fail on a file the card can't decode:
+		// try again the slower way.
+		s.Log.Warn("hls on the gpu failed; trying again with cpu decoding", "file", v.RelPath, "err", err)
+		req.SoftwareDecode = true
+		id, err = s.HLS.Start(r.Context(), req)
+	}
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, transcode.ErrBusy) {
+			status = http.StatusServiceUnavailable
+		}
+		writeErr(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session":  id,
+		"playlist": "/api/v1/hls/session/" + id + "/index.m3u8",
+		"start":    req.Start,
+	})
+}
+
+// hlsFile serves a session's playlist and segments. The session ID is the
+// key: players fetch segments without the token.
+func (s *Server) hlsFile(w http.ResponseWriter, r *http.Request) {
+	if s.HLS == nil {
+		http.NotFound(w, r)
+		return
+	}
+	path, playlist, err := s.HLS.File(r.PathValue("session"), r.PathValue("file"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	if playlist != nil {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Write(playlist)
+		return
+	}
+	// Explicit types: Windows can map .ts to something else entirely.
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".ts":
+		w.Header().Set("Content-Type", "video/mp2t")
+	case ".m4s", ".mp4":
+		w.Header().Set("Content-Type", "video/mp4")
+	}
+	http.ServeFile(w, r, path)
+}
+
+func (s *Server) hlsStop(w http.ResponseWriter, r *http.Request, u store.User) {
+	if s.HLS != nil {
+		s.HLS.Stop(r.PathValue("session"))
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// subtitleVTT answers a text subtitle track as WebVTT, for web browsers and
+// phone players (the TV reads subtitles from the file itself).
+func (s *Server) subtitleVTT(w http.ResponseWriter, r *http.Request, u store.User) {
+	if s.Subtitles == nil {
+		writeErr(w, http.StatusNotImplemented, "subtitle conversion needs ffmpeg on the server")
+		return
+	}
+	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	if err != nil || v.Missing {
+		writeErr(w, http.StatusNotFound, "file not found")
+		return
+	}
+	index, err := strconv.Atoi(strings.TrimSuffix(r.PathValue("index"), ".vtt"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad track")
+		return
+	}
+	streams, err := s.Store.Streams(r.Context(), v.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	codec := ""
+	for _, st := range streams {
+		if st.Index == index && st.Type == "subtitle" {
+			codec = st.Codec
+		}
+	}
+	if codec == "" {
+		writeErr(w, http.StatusNotFound, "no subtitle track with that index")
+		return
+	}
+	vtt, err := s.Subtitles.VTT(r.Context(), v.ID, v.Path, v.Mtime, index, codec)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, transcode.ErrNotText) {
+			status = http.StatusUnprocessableEntity
+		}
+		writeErr(w, status, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.Write(vtt)
+}
+
+// subtitleTrack finds a version and one of its subtitle tracks from the
+// request path, writing the error itself when it can't.
+func (s *Server) subtitleTrack(w http.ResponseWriter, r *http.Request) (store.Version, store.Stream, bool) {
+	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	if err != nil || v.Missing {
+		writeErr(w, http.StatusNotFound, "file not found")
+		return v, store.Stream{}, false
+	}
+	index, err := strconv.Atoi(r.PathValue("index"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad track")
+		return v, store.Stream{}, false
+	}
+	streams, err := s.Store.Streams(r.Context(), v.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return v, store.Stream{}, false
+	}
+	for _, st := range streams {
+		if st.Index == index && st.Type == "subtitle" {
+			return v, st, true
+		}
+	}
+	writeErr(w, http.StatusNotFound, "no subtitle track with that index")
+	return v, store.Stream{}, false
+}
+
+// subtitlePGS answers a Blu-ray picture subtitle track as a timeline of PNGs
+// for the app to draw over the video. The first request starts reading the
+// track; until it's all read, done is false and the app asks again with
+// ?from= set to the events it already has.
+func (s *Server) subtitlePGS(w http.ResponseWriter, r *http.Request, u store.User) {
+	if s.PGS == nil {
+		writeErr(w, http.StatusNotImplemented, "picture subtitles need ffmpeg on the server")
+		return
+	}
+	v, st, ok := s.subtitleTrack(w, r)
+	if !ok {
+		return
+	}
+	if st.Codec != "hdmv_pgs_subtitle" {
+		writeErr(w, http.StatusUnprocessableEntity, "that track isn't Blu-ray (PGS) subtitles")
+		return
+	}
+	from, _ := strconv.Atoi(r.URL.Query().Get("from"))
+	tl, err := s.PGS.Timeline(v.ID, v.Path, v.Mtime, st.Index, from)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if tl.Done {
+		w.Header().Set("Cache-Control", "private, max-age=3600")
+	} else {
+		w.Header().Set("Cache-Control", "no-store")
+	}
+	writeJSON(w, http.StatusOK, tl)
+}
+
+// subtitlePGSImage answers one picture of a PGS track.
+func (s *Server) subtitlePGSImage(w http.ResponseWriter, r *http.Request, u store.User) {
+	if s.PGS == nil {
+		writeErr(w, http.StatusNotImplemented, "picture subtitles need ffmpeg on the server")
+		return
+	}
+	v, st, ok := s.subtitleTrack(w, r)
+	if !ok {
+		return
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(r.PathValue("n"), ".png"))
+	if err != nil || n < 0 {
+		writeErr(w, http.StatusBadRequest, "bad picture")
+		return
+	}
+	f, err := os.Open(s.PGS.ImagePath(v.ID, v.Mtime, st.Index, n))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "no such picture (yet)")
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "image/png")
+	// A picture never changes: a changed file gets a new cache folder.
+	w.Header().Set("Cache-Control", "private, max-age=604800, immutable")
+	_, _ = io.Copy(w, f)
 }

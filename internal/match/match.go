@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -456,6 +457,9 @@ func buildQueries(title, rel string) []string {
 		if base, cc := splitCountry(q); cc != "" {
 			add(base)
 		}
+		for _, v := range variants(q) {
+			add(v)
+		}
 	}
 	add(parse.CleanTitle(title))
 
@@ -471,6 +475,48 @@ func buildQueries(title, rel string) []string {
 			}
 		}
 		add(parse.Parse(filepath.Base(rel)).Title)
+	}
+	return out
+}
+
+var (
+	// "01 Star Wars", "1. Alien", "03 - Heat": a collection's order number.
+	// A plain number without a leading zero or a dot or dash after it is
+	// kept, since it's usually the title ("12 Angry Men", "21 Jump Street").
+	reIndex = regexp.MustCompile(`^(?:0\d{1,2}|\d{1,3}\s*[.\-])\s*(\pL.*)$`)
+	// "Title - George Lucas", "Title - 1080p rip": something after a spaced
+	// dash. Only the part before is tried; the part after is too often a
+	// short word that would match some other film ("Book 1 - Air").
+	reCredit = regexp.MustCompile(`^(.+?\S)\s+-\s+\S.*$`)
+	// "Star Wars Episode IV A New Hope": TMDB names some of these by the
+	// subtitle ("The Empire Strikes Back") and some by the series name
+	// ("Star Wars" for 1977).
+	reEpisodeOf = regexp.MustCompile(`(?i)^(.+?)\s+episode\s+(?:[ivx]{1,4}|\d{1,2})\b\s*(.*)$`)
+	// "Spiderman 1": the first film rarely has the 1 in its real title.
+	reTrailingOne = regexp.MustCompile(`^(.*\pL)\s+1$`)
+)
+
+// variants lists fallback searches for a title that may carry a collection
+// number, a credit, or a series name. They are tried after the title as
+// written, so a real title like "12 Angry Men" is found first.
+func variants(q string) []string {
+	var out []string
+	t := q
+	if m := reIndex.FindStringSubmatch(t); m != nil {
+		t = m[1]
+		out = append(out, t)
+	}
+	if m := reCredit.FindStringSubmatch(t); m != nil {
+		t = m[1]
+		out = append(out, t)
+	} else if m := reTrailingOne.FindStringSubmatch(t); m != nil {
+		out = append(out, m[1])
+	}
+	if m := reEpisodeOf.FindStringSubmatch(t); m != nil {
+		if rest := strings.TrimSpace(strings.Trim(m[2], " -:")); rest != "" {
+			out = append(out, rest)
+		}
+		out = append(out, strings.TrimSpace(m[1]))
 	}
 	return out
 }

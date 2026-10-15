@@ -277,3 +277,47 @@ func (s *Store) AllVersions(ctx context.Context) ([]Version, error) {
 	}
 	return scanVersions(rows)
 }
+
+// ThumbTarget is an "Other videos" file whose title has no picture yet.
+type ThumbTarget struct {
+	VersionID   string
+	ItemID      string
+	Path        string
+	DurationSec float64
+	HDR         string
+}
+
+// VideosNeedingThumbs lists files whose title has no backdrop, for the
+// background worker to grab a frame from: files in plain libraries, and
+// movies and shows that didn't match (a show gets a frame from one of its
+// episodes), so they have a picture until they're matched.
+func (s *Store) VideosNeedingThumbs(ctx context.Context, limit int) ([]ThumbTarget, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT v.id, v.item_id, v.path, v.duration_sec, v.hdr
+		FROM versions v JOIN libraries l ON l.id = v.library_id JOIN items i ON i.id = v.item_id
+		WHERE v.missing = 0 AND v.probe_error = ''
+		AND (l.plain = 1 OR (i.kind = 'movie' AND i.match_state = 'unmatched'))
+		AND NOT EXISTS (SELECT 1 FROM images im WHERE im.item_id = v.item_id AND im.kind = 'backdrop')
+		UNION ALL
+		SELECT v.id, sh.id, v.path, v.duration_sec, v.hdr
+		FROM items sh
+		JOIN items sn ON sn.parent_id = sh.id AND sn.kind = 'season'
+		JOIN items e ON e.parent_id = sn.id AND e.kind = 'episode'
+		JOIN versions v ON v.item_id = e.id
+		WHERE sh.kind = 'show' AND sh.match_state = 'unmatched'
+		AND v.missing = 0 AND v.probe_error = ''
+		AND NOT EXISTS (SELECT 1 FROM images im WHERE im.item_id = sh.id AND im.kind = 'backdrop')
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ThumbTarget
+	for rows.Next() {
+		var t ThumbTarget
+		if err := rows.Scan(&t.VersionID, &t.ItemID, &t.Path, &t.DurationSec, &t.HDR); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}

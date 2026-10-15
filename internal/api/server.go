@@ -13,12 +13,17 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"kinora/internal/auth"
+	"kinora/internal/cloud"
 	"kinora/internal/images"
 	"kinora/internal/jobs"
 	"kinora/internal/match"
+	"kinora/internal/metrics"
+	"kinora/internal/pgs"
+	"kinora/internal/remote"
 	"kinora/internal/scanner"
 	"kinora/internal/store"
 	"kinora/internal/tmdb"
@@ -54,6 +59,28 @@ type Server struct {
 	Warnings []string
 	// Transcoder converts files the player can't play (nil: off).
 	Transcoder *transcode.Transcoder
+	// HLS converts for iPhones and Safari (nil turns it off).
+	HLS *transcode.HLS
+	// Subtitles converts text subtitle tracks to WebVTT (nil without ffmpeg).
+	Subtitles *transcode.Subtitles
+	// PGS reads Blu-ray picture subtitles into timed PNGs for apps to draw
+	// (nil without ffmpeg).
+	PGS *pgs.Extractor
+
+	// playing is what each device last reported playing.
+	playing nowPlaying
+
+	// Metrics samples the computer and traffic (nil: off).
+	Metrics *metrics.Collector
+	// Logs keeps recent warnings and errors for the metrics page.
+	Logs *metrics.LogRing
+	// DataDir is the server's data folder, for storage numbers.
+	DataDir string
+
+	httpStats metrics.HTTPStats
+	storage   storageCache
+	// WebDir holds the built web app, served at /app/ ("" when not installed).
+	WebDir string
 	// Trickplay serves preview thumbnails (nil: off).
 	Trickplay *trickplay.Maker
 	// Jobs makes previews and finds intros in the background (may be nil).
@@ -63,7 +90,19 @@ type Server struct {
 	// FFprobe is the ffprobe executable ("" for the one on PATH).
 	FFprobe string
 
-	limiter  *auth.Limiter
+	// Remote runs remote access through kinora-iroh (nil: not available).
+	Remote *remote.Sidecar
+	// Cloud links the server to a Kinara account for remote play (nil: off).
+	Cloud *cloud.Manager
+
+	limiter *auth.Limiter
+	// tunnelLimiter counts failed sign-ins from all remote devices
+	// together: a remote device's "address" is its node ID, which costs
+	// nothing to change, so a per-address limit alone could be dodged.
+	tunnelLimiter *auth.Limiter
+	// nodeSeen remembers which node ID each session last used through the
+	// tunnel, so the database is written only when it changes.
+	nodeSeen sync.Map
 	tmpl     *template.Template
 	trending trendingCache
 }
@@ -71,6 +110,7 @@ type Server struct {
 // Handler builds the routes.
 func (s *Server) Handler() http.Handler {
 	s.limiter = &auth.Limiter{Max: 10, Window: 10 * time.Minute}
+	s.tunnelLimiter = &auth.Limiter{Max: 30, Window: 10 * time.Minute}
 	s.tmpl = template.Must(template.New("").Funcs(templateFuncs).ParseFS(templatesFS, "templates/*.html"))
 
 	mux := http.NewServeMux()
@@ -78,6 +118,9 @@ func (s *Server) Handler() http.Handler {
 	// Public.
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
+	mux.HandleFunc("POST /api/v1/auth/cloud", s.cloudSignIn)
+	mux.HandleFunc("GET /api/v1/auth/accounts", s.accounts)
+	mux.HandleFunc("POST /api/v1/auth/signup", s.signup)
 	mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")
 		w.Write(openapiSpec)
@@ -104,22 +147,69 @@ func (s *Server) Handler() http.Handler {
 	// Media URLs also accept ?token= so players like VLC can open them.
 	mux.Handle("GET /api/v1/stream/{id}", s.userQuery(s.stream))
 	mux.Handle("GET /api/v1/images/{id}/{kind}", s.userQuery(s.image))
+	mux.Handle("GET /api/v1/images/{id}/{kind}/color", s.user(s.imageColor))
 	mux.Handle("GET /api/v1/cast/{id}/{ord}", s.userQuery(s.castPhoto))
 	mux.Handle("GET /api/v1/transcode/{id}", s.userQuery(s.transcodeStream))
 	mux.Handle("GET /api/v1/transcode/{id}/start", s.user(s.transcodeStart))
+	mux.Handle("POST /api/v1/hls/{id}", s.user(s.hlsStart))
+	mux.Handle("GET /api/v1/subtitles/{id}/{index}", s.userQuery(s.subtitleVTT))
+	mux.Handle("GET /api/v1/subtitles/{id}/{index}/pgs", s.userQuery(s.subtitlePGS))
+	mux.Handle("GET /api/v1/subtitles/{id}/{index}/pgs/{n}", s.userQuery(s.subtitlePGSImage))
+	mux.HandleFunc("GET /api/v1/hls/session/{session}/{file}", s.hlsFile)
+	mux.Handle("DELETE /api/v1/hls/session/{session}", s.user(s.hlsStop))
 	mux.Handle("GET /api/v1/speedtest", s.userQuery(s.speedTest))
 	mux.Handle("GET /api/v1/trickplay/{id}", s.userQuery(s.trickplayManifest))
 	mux.Handle("GET /api/v1/trickplay/{id}/{sheet}", s.userQuery(s.trickplaySheet))
 	mux.Handle("GET /api/v1/tmdb-image/{file}", s.userQuery(s.tmdbImage))
 	mux.Handle("GET /api/v1/genres", s.user(s.listGenres))
 	mux.Handle("GET /api/v1/trending", s.user(s.trendingHandler))
+	mux.Handle("GET /api/v1/lists", s.user(s.getLists))
+	mux.Handle("POST /api/v1/lists", s.user(s.createList))
+	mux.Handle("PATCH /api/v1/lists/{id}", s.user(s.renameList))
+	mux.Handle("DELETE /api/v1/lists/{id}", s.user(s.deleteList))
+	mux.Handle("GET /api/v1/lists/{id}/items", s.user(s.listItemsHandler))
+	mux.Handle("PUT /api/v1/lists/{id}/items/{item}", s.user(s.addToList))
+	mux.Handle("DELETE /api/v1/lists/{id}/items/{item}", s.user(s.removeFromList))
 
 	// Admin.
 	mux.Handle("POST /api/v1/libraries", s.admin(s.createLibrary))
 	mux.Handle("DELETE /api/v1/libraries/{id}", s.admin(s.deleteLibrary))
+	mux.Handle("PATCH /api/v1/libraries/{id}", s.admin(s.updateLibrary))
+	mux.Handle("POST /api/v1/libraries/{id}/folders", s.admin(s.addLibraryFolder))
+	mux.Handle("DELETE /api/v1/libraries/{id}/folders", s.admin(s.removeLibraryFolder))
+	mux.Handle("GET /api/v1/fs/folders", s.admin(s.listFolders))
 	mux.Handle("POST /api/v1/libraries/{id}/scan", s.admin(s.scanLibrary))
 	mux.Handle("POST /api/v1/libraries/{id}/rematch", s.admin(s.rematchLibrary))
 	mux.Handle("POST /api/v1/items/{id}/match", s.admin(s.fixMatch))
+	mux.Handle("GET /api/v1/users", s.admin(s.listUsers))
+	mux.Handle("POST /api/v1/users", s.admin(s.createUserHandler))
+	mux.Handle("PATCH /api/v1/users/{id}", s.admin(s.updateUser))
+	mux.Handle("DELETE /api/v1/users/{id}", s.admin(s.deleteUser))
+	mux.Handle("GET /api/v1/libraries/{id}/problems", s.admin(s.libraryProblems))
+	mux.Handle("GET /api/v1/status", s.admin(s.status))
+	mux.Handle("GET /api/v1/cloud", s.admin(s.cloudStatus))
+	mux.Handle("POST /api/v1/cloud/link", s.admin(s.cloudLink))
+	mux.Handle("DELETE /api/v1/cloud/link", s.admin(s.cloudCancelLink))
+	mux.Handle("POST /api/v1/cloud/unlink", s.admin(s.cloudUnlink))
+	mux.Handle("GET /api/v1/playback/advice", s.user(s.playbackAdvice))
+	mux.Handle("GET /api/v1/playback", s.admin(s.nowPlayingList))
+	mux.Handle("GET /api/v1/devices", s.admin(s.devices))
+	mux.Handle("DELETE /api/v1/devices/{id}", s.admin(s.signOutDevice))
+	mux.Handle("GET /api/v1/metrics/live", s.admin(s.metricsLive))
+	mux.Handle("GET /api/v1/metrics/storage", s.admin(s.metricsStorage))
+	mux.Handle("GET /api/v1/metrics/usage", s.admin(s.metricsUsage))
+	mux.Handle("GET /api/v1/metrics/http", s.admin(s.metricsHTTP))
+	mux.Handle("GET /api/v1/metrics/logs", s.admin(s.metricsLogs))
+	mux.Handle("GET /api/v1/remote", s.admin(s.remoteInfo))
+	mux.Handle("PUT /api/v1/remote/settings", s.admin(s.putRemoteSettings))
+	mux.Handle("POST /api/v1/remote/block", s.admin(s.remoteBlock))
+	mux.Handle("POST /api/v1/remote/unblock", s.admin(s.remoteUnblock))
+	mux.Handle("GET /api/v1/settings", s.admin(s.getSettings))
+	mux.Handle("PUT /api/v1/settings", s.admin(s.putSettings))
+
+	// The web player and manager.
+	mux.Handle("GET /app/", s.webApp())
+	mux.Handle("GET /app", http.RedirectHandler("/app/", http.StatusFound))
 
 	// Built-in web page.
 	s.uiRoutes(mux)
@@ -170,6 +260,7 @@ func (s *Server) lookup(r *http.Request, allowQuery bool) (authed, bool) {
 	if nowT.Unix()-lastSeen > int64(sessionRefresh.Seconds()) {
 		_ = s.Store.TouchSession(r.Context(), hash, nowT.Add(sessionTTL).Unix())
 	}
+	s.noteNode(r, hash)
 	return authed{user: u, tokenHash: hash}, true
 }
 
@@ -197,6 +288,25 @@ func sessionFrom(r *http.Request) authed {
 type statusWriter struct {
 	http.ResponseWriter
 	status int
+	bytes  int64
+	// count, if set, gets bytes as they're sent (for live traffic rates).
+	count func(n int64)
+}
+
+func (w *statusWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.sent(int64(n))
+	return n, err
+}
+
+func (w *statusWriter) sent(n int64) {
+	w.bytes += n
+	if w.count != nil {
+		w.count(n)
+	}
 }
 
 func (w *statusWriter) WriteHeader(code int) {
@@ -219,13 +329,19 @@ func (w *statusWriter) ReadFrom(r io.Reader) (int64, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	return io.Copy(w.ResponseWriter, r)
+	n, err := io.Copy(w.ResponseWriter, r)
+	w.sent(n)
+	return n, err
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w}
+		if s.Metrics != nil {
+			sw.count = s.Metrics.AddOut
+			s.Metrics.AddIn(max(r.ContentLength, 0))
+		}
 		// Logged in a defer so a request cut off on purpose (a conversion
 		// that failed partway) still shows up.
 		defer func() {
@@ -239,10 +355,13 @@ func (s *Server) logRequest(r *http.Request, sw *statusWriter, start time.Time) 
 	if sw.status == 0 {
 		sw.status = http.StatusOK
 	}
+	// The mux names the route it picked on the request.
+	s.httpStats.Record(r.Pattern, sw.status, time.Since(start), sw.bytes)
 	level := slog.LevelDebug
 	if sw.status >= 500 {
 		level = slog.LevelError
-	} else if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/v1/images/") {
+	} else if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/v1/images/") &&
+		!strings.HasPrefix(r.URL.Path, "/api/v1/hls/session/") {
 		level = slog.LevelInfo
 	}
 	s.Log.Log(r.Context(), level, "request", "method", r.Method, "path", r.URL.Path,

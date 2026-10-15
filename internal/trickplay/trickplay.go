@@ -43,6 +43,21 @@ type Manifest struct {
 	FileMtime  int64  `json:"fileMtime"`
 	MadeAt     int64  `json:"madeAt"`
 	FailReason string `json:"failReason,omitempty"`
+	// Colour is how HDR was turned into SDR for the sheets: "placebo",
+	// "zscale" or "" (none). HDR previews are remade when a better way
+	// becomes available (Dolby Vision through zscale comes out pink).
+	Colour string `json:"colour,omitempty"`
+}
+
+// colourMethod names the HDR conversion this ffmpeg will use.
+func colourMethod(c ffmpeg.Caps) string {
+	switch {
+	case c.Placebo:
+		return "placebo"
+	case c.ToneMap:
+		return "zscale"
+	}
+	return ""
 }
 
 // Maker writes previews under Dir/<version ID>/.
@@ -92,6 +107,9 @@ func (m *Maker) Needed(v store.Version) bool {
 	if man.FailReason != "" {
 		return time.Since(time.Unix(man.MadeAt, 0)) > 7*24*time.Hour
 	}
+	if v.HDR != "" && man.Colour != colourMethod(m.Tool.Caps()) {
+		return true
+	}
 	return false
 }
 
@@ -124,7 +142,7 @@ func (m *Maker) Make(ctx context.Context, v store.Version) (Manifest, error) {
 	run := func(tonemap bool) error {
 		vf := fmt.Sprintf("fps=1/%d,scale=%d:-2", Interval, Width)
 		if tonemap {
-			vf = fmt.Sprintf("fps=1/%d,scale=%d:-2,%s", Interval, Width, ffmpeg.ToneMapFilter)
+			vf = fmt.Sprintf("fps=1/%d,scale=%d:-2,%s", Interval, Width, caps.HDRToSDR())
 		}
 		vf += fmt.Sprintf(",tile=%dx%d", Cols, Rows)
 		cmd := exec.CommandContext(ctx, m.Tool.Path(),
@@ -146,14 +164,20 @@ func (m *Maker) Make(ctx context.Context, v store.Version) (Manifest, error) {
 		}
 		return nil
 	}
-	err := run(v.HDR != "" && caps.ToneMap)
-	if err != nil && ctx.Err() == nil && v.HDR != "" && caps.ToneMap {
+	tonemap := v.HDR != "" && caps.HDRToSDR() != ""
+	err := run(tonemap)
+	if err != nil && ctx.Err() == nil && tonemap {
 		err = run(false) // tone mapping failed (an unusual format): plain previews
 	}
 	if ctx.Err() != nil {
 		return Manifest{}, ctx.Err()
 	}
 	man := Manifest{Interval: Interval, Cols: Cols, Rows: Rows, FileMtime: v.Mtime, MadeAt: time.Now().Unix()}
+	if v.HDR != "" {
+		// Recorded even when it fell back to plain previews, so a file the
+		// filter can't handle isn't retried on every pass.
+		man.Colour = colourMethod(caps)
+	}
 	if err == nil {
 		err = m.measure(tmp, &man, v.DurationSec)
 	}

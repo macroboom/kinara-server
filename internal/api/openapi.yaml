@@ -103,8 +103,12 @@ components:
       properties:
         id: { type: integer }
         name: { type: string }
-        path: { type: string }
-        kind: { type: string, enum: [movies, tv] }
+        path: { type: string, description: The first folder }
+        folders:
+          type: array
+          description: Every folder in the library, oldest first
+          items: { type: string }
+        kind: { type: string, enum: [movies, tv, other] }
         lastScanAt: { type: integer }
         stats:
           type: object
@@ -181,6 +185,8 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
+                  product: { type: string, description: 'Always "kinora", so apps scanning the network can recognise the server' }
+                  name: { type: string, description: The computer's name }
                   version: { type: string }
                   setupDone: { type: boolean }
                   metadata: { type: boolean, description: Whether a TMDB key is set }
@@ -256,18 +262,224 @@ paths:
               properties:
                 name: { type: string }
                 path: { type: string, description: Absolute folder path on the server }
-                kind: { type: string, enum: [movies, tv] }
+                kind: { type: string, enum: [movies, tv, other] }
       responses:
         "201": { description: Created }
-        "400": { description: Invalid folder or kind }
+        "400": { description: Invalid folder or kind, or the folder overlaps one a library has }
 
   /libraries/{id}:
+    patch:
+      summary: Rename a library (admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 80 }
+      responses:
+        "200":
+          description: The library
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Library" }
+        "400": { description: Empty or too long name }
+        "404": { description: No such library }
     delete:
       summary: Remove a library (admin). Files are not touched.
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "204": { description: Removed }
+
+  /libraries/{id}/folders:
+    post:
+      summary: Add a folder to a library and scan it (admin)
+      description: >
+        The folder can't be one a library already has, or sit inside or around
+        one. If a scan is running, another runs when it ends.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string, description: Absolute folder path on the server }
+      responses:
+        "201":
+          description: The library
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Library" }
+        "400": { description: Invalid or overlapping folder }
+        "404": { description: No such library }
+    delete:
+      summary: Take a folder out of a library (admin)
+      description: >
+        Kinara forgets the files in it; nothing on disk is touched. Titles left
+        with no files are removed unless someone has watched them. A library's
+        only folder can't be removed: remove the library instead.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: path, in: query, required: true, schema: { type: string }, description: The folder exactly as the library lists it }
+      responses:
+        "200":
+          description: The library, plus how many file records were dropped
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/Library" }
+                  - type: object
+                    properties:
+                      removedFiles: { type: integer }
+        "400": { description: That is the library's only folder }
+        "404": { description: The folder isn't part of this library }
+        "409": { description: A scan is running }
+
+  /subtitles/{versionId}/{index}/pgs:
+    get:
+      summary: A Blu-ray (PGS) subtitle track as timed pictures, for the app to draw over the video
+      description: >
+        The first request starts reading the track (just that track is copied out of the file;
+        nothing is decoded), so done is false at first. Ask again every couple of seconds with
+        from set to the events already had, until done. Times are seconds in the file; x and y
+        place each picture in a width x height frame. The token may be given as ?token=.
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string } }
+        - { name: index, in: path, required: true, schema: { type: integer }, description: The subtitle stream index }
+        - { name: from, in: query, schema: { type: integer }, description: Events to skip (ones already had) }
+      responses:
+        "200":
+          description: The timeline from `from` on
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  width: { type: integer }
+                  height: { type: integer }
+                  done: { type: boolean }
+                  total: { type: integer }
+                  error: { type: string }
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        start: { type: number }
+                        end: { type: number }
+                        images:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              n: { type: integer, description: "Picture: .../pgs/{n}.png" }
+                              x: { type: integer }
+                              y: { type: integer }
+                              w: { type: integer }
+                              h: { type: integer }
+                              forced: { type: boolean }
+        "404": { description: No such file or track }
+        "422": { description: The track isn't PGS }
+        "501": { description: The server has no ffmpeg }
+
+  /subtitles/{versionId}/{index}/pgs/{n}.png:
+    get:
+      summary: One picture of a PGS track
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string } }
+        - { name: index, in: path, required: true, schema: { type: integer } }
+        - { name: n, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: PNG with transparency }
+        "404": { description: Not made (yet) }
+
+  /playback/advice:
+    get:
+      summary: Whether a player should step its quality down
+      description: >
+        Players ask every few seconds while the server converts for them. "lower" means the
+        server can't convert fast enough (or another device has priority): start again at next.
+      parameters:
+        - { name: version, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Advice
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  action: { type: string, enum: [ok, lower] }
+                  reason: { type: string }
+                  next:
+                    type: object
+                    properties:
+                      maxBitrate: { type: integer }
+                      maxHeight: { type: integer }
+
+  /playback:
+    get:
+      summary: What each device is playing now, with its conversion's speed (admin)
+      responses:
+        "200": { description: List of devices playing }
+
+  /devices:
+    get:
+      summary: Signed-in devices (admin)
+      responses:
+        "200": { description: Devices, most recently seen first }
+
+  /devices/{id}:
+    delete:
+      summary: Sign a device out (admin). It also stops being the priority device.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Signed out }
+        "404": { description: No such device }
+
+  /fs/folders:
+    get:
+      summary: Folders on the server's disks, for the folder picker (admin)
+      description: >
+        With no path, lists places to start: drives on Windows; the root, home
+        and the usual mount points elsewhere. Hidden and system folders are left
+        out. Each folder says which library already has it (or a folder around it).
+      parameters:
+        - { name: path, in: query, schema: { type: string }, description: Absolute folder to list }
+      responses:
+        "200":
+          description: The folder's subfolders
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  path: { type: string, description: Empty for the top level }
+                  parent: { type: string, description: Empty at a drive or the root }
+                  library: { type: string }
+                  videos: { type: integer, description: Video files directly in this folder }
+                  separator: { type: string }
+                  truncated: { type: boolean }
+                  folders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        path: { type: string }
+                        library: { type: string }
+        "400": { description: Not an absolute path }
+        "404": { description: The folder can't be opened }
 
   /libraries/{id}/scan:
     post:
@@ -605,6 +817,19 @@ paths:
         "200": { description: Image }
         "404": { description: No artwork }
 
+  /images/{id}/{kind}/color:
+    get:
+      summary: The artwork's dominant colour, for tinting the app to match it
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [poster, backdrop, still] } }
+      responses:
+        "200":
+          description: '"#rrggbb", or "" when the artwork is mostly grey or missing'
+          content:
+            application/json:
+              schema: { type: object, properties: { color: { type: string } } }
+
   /transcode/{id}:
     get:
       summary: Convert a file on the fly for players that can't play it as is
@@ -619,6 +844,7 @@ paths:
         - { name: maxBitrate, in: query, schema: { type: integer }, description: "kbit/s for re-encoded video (default 8000)" }
         - { name: maxHeight, in: query, schema: { type: integer }, description: "Pixels for re-encoded video (default 1080)" }
         - { name: audio, in: query, schema: { type: integer }, description: Source stream index of the audio track (default the first) }
+        - { name: container, in: query, schema: { type: string, enum: [mkv, mp4] }, description: "mkv (default) or mp4: fragmented MP4 for web browsers, without subtitles" }
         - { name: audioCodec, in: query, required: true, schema: { type: string, enum: [copy, aac] } }
         - { name: token, in: query, schema: { type: string } }
       responses:
@@ -709,3 +935,201 @@ paths:
         - { name: token, in: query, schema: { type: string } }
       responses:
         "200": { description: Image }
+
+  /auth/accounts:
+    get:
+      summary: Accounts the sign-in screen can offer, and whether new ones can be made
+      security: []
+      description: |
+        `accounts` is empty when the owner turned the list off. `allowSignup`
+        says whether POST /auth/signup is open.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items: { type: object, properties: { username: { type: string }, color: { type: string } } }
+                  allowSignup: { type: boolean }
+
+  /auth/signup:
+    post:
+      summary: Make an ordinary account and sign it in (only when the owner allows sign-up)
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, description: "1 to 32 letters, digits, spaces, dots, dashes or underscores" }
+                password: { type: string, description: At least 8 characters }
+                deviceName: { type: string }
+      responses:
+        "201": { description: Signed in; same shape as /auth/login }
+        "400": { description: Bad name or short password }
+        "403": { description: Sign-up is off }
+        "409": { description: Name taken }
+
+  /lists:
+    get:
+      summary: This profile's lists ("My List" first, made on first use) with counts
+      responses:
+        "200": { description: OK }
+    post:
+      summary: Make a named list
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { name: { type: string } } }
+      responses:
+        "201": { description: The new list }
+        "400": { description: Name must be 1 to 80 characters }
+
+  /lists/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+    patch:
+      summary: Rename a list
+      responses:
+        "204": { description: Renamed }
+    delete:
+      summary: Remove a named list ("My List" can't be removed)
+      responses:
+        "204": { description: Removed }
+        "400": { description: That's My List }
+
+  /lists/{id}/items:
+    get:
+      summary: The titles on a list, newest first ("default" for My List)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: 'A list ID, or "default"' }
+      responses:
+        "200": { description: '{"listId": 1, "items": [...]}' }
+
+  /lists/{id}/items/{item}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string }, description: 'A list ID, or "default"' }
+      - { name: item, in: path, required: true, schema: { type: string }, description: A movie or show }
+    put:
+      summary: Add a title to a list (again is fine)
+      responses:
+        "204": { description: Added }
+    delete:
+      summary: Take a title off a list
+      responses:
+        "204": { description: Removed }
+
+  /users:
+    get:
+      summary: Every account (owners only)
+      responses:
+        "200": { description: OK }
+    post:
+      summary: Add an account (owners only)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                password: { type: string }
+                isAdmin: { type: boolean }
+      responses:
+        "201": { description: The new account }
+        "409": { description: Name taken }
+
+  /users/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+    patch:
+      summary: Set a new password (signs the account out everywhere) or change owner rights
+      responses:
+        "204": { description: Saved }
+        "409": { description: That would leave the server without an owner }
+    delete:
+      summary: Remove an account and its history (not your own)
+      responses:
+        "204": { description: Removed }
+
+  /settings:
+    get:
+      summary: Server settings (owners only)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  listAccounts: { type: boolean, description: Show accounts on the sign-in screen }
+                  allowSignup: { type: boolean, description: Let anyone who reaches the server make an account }
+    put:
+      summary: Save server settings (owners only)
+      responses:
+        "200": { description: Saved }
+
+  /hls/{id}:
+    post:
+      summary: Start an HLS conversion of a file (iPhones, iPads, Safari)
+      description: |
+        Takes the same query as /transcode/{id} (video, audioCodec, audio,
+        start, maxBitrate, maxHeight). Answers once the first segment is
+        ready. The playlist and its segments are fetched without a token:
+        the session ID is the key. A session ends after about 90 s without
+        requests, or when stopped.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: Version ID }
+      responses:
+        "200":
+          description: Started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session: { type: string }
+                  playlist: { type: string, description: 'Like "/api/v1/hls/session/<session>/index.m3u8"' }
+                  start: { type: number, description: Seconds into the file the stream begins at }
+        "503": { description: Converting as many streams as it can }
+
+  /hls/session/{session}/{file}:
+    get:
+      summary: An HLS session's playlist (index.m3u8) or segment (init.mp4, segNNNNN.m4s)
+      security: []
+      parameters:
+        - { name: session, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The file }
+        "404": { description: The session ended }
+
+  /hls/session/{session}:
+    delete:
+      summary: Stop an HLS session and delete its files
+      parameters:
+        - { name: session, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Stopped }
+
+  /libraries/{id}/problems:
+    get:
+      summary: Files that couldn't be read or placed, and titles that didn't match (owners only)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: '{"unreadable": [...], "unplaced": [...], "unmatched": [...]}' }
+
+  /status:
+    get:
+      summary: How the server is set up (owners only)
+      description: Version, warnings, whether metadata, converting and HLS are on, what ffmpeg can do, and what the background worker is doing.
+      responses:
+        "200": { description: OK }

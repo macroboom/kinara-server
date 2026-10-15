@@ -4,6 +4,8 @@ package store
 const (
 	KindMovies = "movies"
 	KindTV     = "tv"
+	// KindOther is a plain folder of videos: no metadata, each file its own title.
+	KindOther = "other"
 )
 
 // Item kinds.
@@ -31,12 +33,14 @@ const (
 )
 
 type Library struct {
-	ID         int64  `json:"id"`
-	Name       string `json:"name"`
-	Path       string `json:"path"`
-	Kind       string `json:"kind"`
-	CreatedAt  int64  `json:"createdAt"`
-	LastScanAt int64  `json:"lastScanAt"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// Path is the first folder. Folders lists them all, oldest first.
+	Path       string   `json:"path"`
+	Folders    []string `json:"folders"`
+	Kind       string   `json:"kind"`
+	CreatedAt  int64    `json:"createdAt"`
+	LastScanAt int64    `json:"lastScanAt"`
 }
 
 type LibraryStats struct {
@@ -203,4 +207,14 @@ type ItemFilter struct {
 	Search string
 	// Genre keeps titles with this TMDB genre ("Comedy").
 	Genre string
+	// IncludeOther includes "Other videos" libraries when no LibraryID is
+	// given (they're left out of Movies, Home rows and so on by default).
+	IncludeOther bool
+	// OnlyOther keeps just the "Other" tab: the "Other videos" libraries,
+	// plus movies and shows that didn't match, from any library.
+	OnlyOther bool
+	// IncludeUnmatched keeps movies and shows that didn't match in a
+	// listing (they're left out of libraries and Home rows by default and
+	// shown on the Other tab instead).
+	IncludeUnmatched bool
 }

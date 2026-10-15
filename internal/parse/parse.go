@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Kind is what a file looks like from its name and folders alone.
@@ -74,9 +75,18 @@ func IsVideo(p string) bool {
 var (
 	reSample   = regexp.MustCompile(`(?i)(^|[ ._\-\[(])sample([ ._\-\])]|$)`)
 	reExtraSuf = regexp.MustCompile(`(?i)-(trailer|featurette|behindthescenes|deleted|interview|scene|short|other)$`)
-	reTMDB     = regexp.MustCompile(`(?i)[\[{](?:tmdb|tmdbid)[-=](\d+)[\]}]`)
-	reIMDB     = regexp.MustCompile(`(?i)[\[{](?:imdb|imdbid)[-=](tt\d+)[\]}]`)
-	reBracket  = regexp.MustCompile(`\[[^\]]*\]|\{[^}]*\}`)
+	// "Movie (2012) preview", "Movie.Trailer.2", "Movie - teaser": a trailer
+	// saved next to the film. Needs text before it, so a film named just
+	// "Preview" isn't skipped.
+	reExtraWord = regexp.MustCompile(`(?i)\S[ ._\-]+(?:trailer|preview|teaser)(?:[ ._\-]?\d{1,2})?$`)
+	// Edition labels in parentheses: "(Theatrical)", "(Director's Cut)",
+	// "(Extended Edition)", "(25th Anniversary Edition)". They aren't part
+	// of the title, and TMDB finds nothing when they're searched.
+	reParens  = regexp.MustCompile(`\(([^()]*)\)`)
+	reEdition = regexp.MustCompile(`(?i)^\s*(?:(?:the\s+)?(?:theatrical|extended|director'?s|directors|unrated|uncut|remastered|restored|special|ultimate|collector'?s|definitive|anniversary|\d{1,3}(?:st|nd|rd|th)?\s+anniversary|imax|final|redux|criterion|open\s+matte|international|original)\b.*|.*\b(?:cut|edition|version)\s*)$`)
+	reTMDB    = regexp.MustCompile(`(?i)[\[{](?:tmdb|tmdbid)[-=](\d+)[\]}]`)
+	reIMDB    = regexp.MustCompile(`(?i)[\[{](?:imdb|imdbid)[-=](tt\d+)[\]}]`)
+	reBracket = regexp.MustCompile(`\[[^\]]*\]|\{[^}]*\}`)
 
 	// S01E02, S1E2, s01.e02, S01EP02, S01E01E02, S01E01-E02, S01E01-02
 	reSxE = regexp.MustCompile(`(?i)\bs(\d{1,3}) ?e(?:p ?)?(\d{1,3})(?: ?-? ?e?(\d{1,3}))?\b`)
@@ -160,6 +170,13 @@ func Parse(rel string) Result {
 	}
 	if reExtraSuf.MatchString(name) {
 		r.Extra = true
+	}
+	// A trailing "preview" or "trailer" only on files that aren't episodes:
+	// an episode can be called "The Preview".
+	if w := strings.TrimSpace(separatorsToSpaces(stripBracketsKeepEpisode(name))); reExtraWord.MatchString(w) {
+		if _, ep := findEpisode(w); !ep {
+			r.Extra = true
+		}
 	}
 
 	// Season folder, nearest to the file.
@@ -362,6 +379,7 @@ func extractPart(s string) (int, string) {
 // "Night.Shift.2023.1080p.BluRay.x264" or "The Long Harbor (2024)".
 func cleanTitle(s string) (string, int) {
 	s = stripBrackets(s)
+	s = stripEditions(s)
 	work := separatorsToSpaces(s)
 	if m := reSeasonTag.FindStringIndex(work); m != nil && strings.TrimSpace(work[:m[0]]) != "" {
 		s = work[:m[0]]
@@ -400,6 +418,17 @@ func cleanTitle(s string) (string, int) {
 }
 
 func stripBrackets(s string) string { return reBracket.ReplaceAllString(s, " ") }
+
+// stripEditions drops edition labels in parentheses, keeping years and any
+// other parenthesised words (which may be part of the title).
+func stripEditions(s string) string {
+	return reParens.ReplaceAllStringFunc(s, func(m string) string {
+		if reEdition.MatchString(m[1 : len(m)-1]) {
+			return " "
+		}
+		return m
+	})
+}
 
 // separatorsToSpaces turns dots and underscores into spaces when the name
 // mostly uses them as word separators. Dots followed by a space are kept, so
@@ -479,7 +508,11 @@ func Normalize(s string) string {
 		switch {
 		case r == '\'' || r == '’' || r == 'ʼ':
 			// dropped
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r > 127:
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r > 127 && (unicode.IsLetter(r) || unicode.IsDigit(r)):
+			// Other scripts are kept; symbols like the dot in "WALL·E" or
+			// a dash are separators, as "-" is.
 			b.WriteRune(r)
 		default:
 			b.WriteRune(' ')

@@ -213,3 +213,110 @@ func TestStartAlignsReal(t *testing.T) {
 		}
 	}
 }
+
+func TestStatsSplitter(t *testing.T) {
+	var rest bytes.Buffer
+	s := &statsSplitter{rest: &rest}
+	s.Write([]byte("frame=  10 fps=5.0 q=20 size=  1kB time=00:00:01 bitrate=1kbits/s speed=0.4x\r"))
+	s.Write([]byte("Error while decoding\nframe=  20 fps=9 q=20 size=  2kB time=00:00:02 bitrate=1kbits/s speed=0.8x\r"))
+	if got := s.last(); !strings.Contains(got, "speed=0.8x") {
+		t.Errorf("last = %q", got)
+	}
+	if rest.String() != "Error while decoding\n" {
+		t.Errorf("rest = %q", rest.String())
+	}
+}
+
+func TestParseKeyPackets(t *testing.T) {
+	out := []byte(`{"packets":[
+		{"pts_time":"12.500000","dts_time":"12.400000","flags":"K__"},
+		{"pts_time":"12.541000","flags":"___"},
+		{"dts_time":"22.400000","flags":"K_"},
+		{"pts_time":"N/A","dts_time":"N/A","flags":"K"}],
+		"format":{"start_time":"1.400000"}}`)
+	keys, err := parseKeyPackets(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 2 || keys[0] < 11.09 || keys[0] > 11.11 || keys[1] < 20.99 || keys[1] > 21.01 {
+		t.Fatalf("keys = %v", keys)
+	}
+}
+
+func TestArgsMP4AndFilters(t *testing.T) {
+	r := Request{Path: "x.mkv", Video: "copy", Audio: -1, AudioCodec: "aac", Container: "mp4", SourceCodec: "hevc",
+		Subtitles: []store.Stream{{Index: 2, Type: "subtitle", Codec: "subrip"}}}
+	if err := r.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	a := Args(r, ffmpeg.Caps{Found: true})
+	joined := strings.Join(a, " ")
+	if !strings.Contains(joined, "-movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1") {
+		t.Errorf("mp4 output: %s", joined)
+	}
+	if strings.Contains(joined, "0:2") {
+		t.Errorf("mp4 must not carry subtitles: %s", joined)
+	}
+	if !has(a, "-tag:v", "hvc1") {
+		t.Errorf("hevc in mp4 needs the hvc1 tag: %s", joined)
+	}
+	if !has(a, "-flush_packets", "1") || !has(a, "-max_interleave_delta", "1000000") {
+		t.Errorf("first bytes flags missing: %s", joined)
+	}
+
+	bad := Request{Video: "copy", AudioCodec: "copy", Container: "avi"}
+	if bad.Validate() == nil {
+		t.Error("avi container accepted")
+	}
+	def := Request{Video: "copy", AudioCodec: "copy"}
+	if def.Validate(); def.Container != "mkv" {
+		t.Errorf("default container %q", def.Container)
+	}
+
+	// libplacebo scales and tone maps in one GPU step; zscale keeps the CPU scale first.
+	hdr := Request{Video: "h264", HDR: "dolby_vision", MaxHeight: 720}
+	vf := videoFilter(hdr, ffmpeg.Caps{Placebo: true, ToneMap: true})
+	if !strings.HasPrefix(vf, "libplacebo=w=-2:h='min(ih,720)':") || strings.Contains(vf, "scale=") || strings.Count(vf, "libplacebo") != 1 {
+		t.Errorf("placebo filter: %s", vf)
+	}
+	vf = videoFilter(hdr, ffmpeg.Caps{ToneMap: true})
+	if !strings.HasPrefix(vf, "scale=-2:'min(ih,720)',zscale") {
+		t.Errorf("zscale filter: %s", vf)
+	}
+	vf = videoFilter(Request{Video: "h264"}, ffmpeg.Caps{Placebo: true})
+	if vf != "scale=-2:'min(ih,1080)',format=yuv420p" {
+		t.Errorf("sdr filter: %s", vf)
+	}
+}
+
+// A browser stream: fragmented MP4 that a player can read as it arrives.
+func TestStreamMP4Real(t *testing.T) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe not installed")
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "in.mkv")
+	gen := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24:duration=6", "-f", "lavfi", "-i", "sine=duration=6",
+		"-c:v", "libx264", "-c:a", "ac3", src)
+	if out, err := gen.CombinedOutput(); err != nil {
+		t.Skipf("can't make clip: %v %s", err, out)
+	}
+	var buf bytes.Buffer
+	tr := &Transcoder{Tool: &ffmpeg.Tool{}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := tr.Stream(context.Background(), &buf, Request{Path: src, Video: "copy", Audio: -1, AudioCodec: "aac", Container: "mp4"}); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out.mp4")
+	if err := os.WriteFile(out, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_name:format=format_name", "-of", "csv=p=0", out).Output()
+	if err != nil {
+		t.Fatalf("ffprobe: %v", err)
+	}
+	got := string(probe)
+	if !strings.Contains(got, "h264") || !strings.Contains(got, "aac") || !strings.Contains(got, "mp4") {
+		t.Errorf("probe = %q", got)
+	}
+}

@@ -5,8 +5,11 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,7 +26,10 @@ type Worker struct {
 	Trickplay *trickplay.Maker // nil turns previews off
 	// Intros turns intro detection on.
 	Intros bool
-	Log    *slog.Logger
+	// ThumbDir is where pictures for "Other videos" titles are written
+	// ("" turns them off).
+	ThumbDir string
+	Log      *slog.Logger
 	// Idle is how long to wait between passes when there's nothing to do.
 	Idle time.Duration
 
@@ -42,7 +48,30 @@ type Status struct {
 	PreviewsMade int    `json:"previewsMade"`
 	IntrosFound  int    `json:"introsFound"`
 	SeasonsDone  int    `json:"seasonsDone"`
+	PicturesMade int    `json:"picturesMade"`
+	// Current is the job running now, if any.
+	Current *Task `json:"current,omitempty"`
+	// Recent lists finished jobs, newest first.
+	Recent []Task `json:"recent"`
 }
+
+// Task is one piece of background work.
+type Task struct {
+	// Kind is "previews", "intros" or "picture".
+	Kind string `json:"kind"`
+	// Name is what it was for: a file name, or a season's folder.
+	Name string `json:"name"`
+	// Path is the full path, for a tooltip.
+	Path      string  `json:"path,omitempty"`
+	StartedAt int64   `json:"startedAt"`
+	TookSec   float64 `json:"tookSec,omitempty"`
+	Failed    bool    `json:"failed,omitempty"`
+	// Result says what came of it ("14 of 16 episodes have an intro").
+	Result string `json:"result,omitempty"`
+}
+
+// keepRecent is how many finished jobs the status keeps.
+const keepRecent = 60
 
 func (w *Worker) init() {
 	w.mu.Lock()
@@ -83,12 +112,56 @@ func (w *Worker) Prioritize(versionID string) {
 func (w *Worker) Status() Status {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.status
+	st := w.status
+	if st.Current != nil {
+		c := *st.Current
+		st.Current = &c
+	}
+	st.Recent = append([]Task{}, w.status.Recent...)
+	return st
 }
 
 func (w *Worker) setDoing(s string) {
 	w.mu.Lock()
 	w.status.Doing = s
+	if s == "" {
+		w.status.Current = nil
+	}
+	w.mu.Unlock()
+}
+
+// begin marks a job as running. path is shown by its last part.
+func (w *Worker) begin(kind, label, path string) *Task {
+	t := &Task{Kind: kind, Name: filepath.Base(path), Path: path, StartedAt: time.Now().Unix()}
+	w.mu.Lock()
+	w.status.Doing = label + ": " + path
+	c := *t
+	w.status.Current = &c
+	w.mu.Unlock()
+	return t
+}
+
+// step updates the running job's file (intro detection reads a season one
+// episode at a time) without starting a new log line.
+func (w *Worker) step(label, path string) {
+	w.mu.Lock()
+	w.status.Doing = label + ": " + path
+	if w.status.Current != nil {
+		w.status.Current.Path = path
+	}
+	w.mu.Unlock()
+}
+
+// finish logs a job as done.
+func (w *Worker) finish(t *Task, failed bool, result string) {
+	t.TookSec = time.Since(time.Unix(t.StartedAt, 0)).Round(100 * time.Millisecond).Seconds()
+	t.Failed, t.Result = failed, result
+	w.mu.Lock()
+	w.status.Recent = append([]Task{*t}, w.status.Recent...)
+	if len(w.status.Recent) > keepRecent {
+		w.status.Recent = w.status.Recent[:keepRecent]
+	}
+	w.status.Current = nil
 	w.mu.Unlock()
 }
 
@@ -132,6 +205,14 @@ func (w *Worker) pass(ctx context.Context) bool {
 			w.makePreviews(ctx, v)
 		}
 		return true
+	}
+	// Pictures for "Other videos" first: they're quick, and without one the
+	// title shows as a blank tile.
+	if w.ThumbDir != "" {
+		if t, ok := w.nextThumb(ctx); ok {
+			w.makeThumb(ctx, t)
+			return true
+		}
 	}
 	if w.Intros {
 		seasons, err := w.Store.SeasonsNeedingIntros(ctx, 1)
@@ -191,7 +272,7 @@ func (w *Worker) hasUrgent() bool {
 }
 
 func (w *Worker) makePreviews(ctx context.Context, v store.Version) {
-	w.setDoing("previews: " + v.RelPath)
+	task := w.begin("previews", "previews", v.RelPath)
 	start := time.Now()
 	man, err := w.Trickplay.Make(ctx, v)
 	if ctx.Err() != nil {
@@ -199,6 +280,7 @@ func (w *Worker) makePreviews(ctx context.Context, v store.Version) {
 	}
 	if err != nil {
 		w.Log.Warn("previews failed", "file", v.RelPath, "err", err)
+		w.finish(task, true, shortErr(err))
 		w.mu.Lock()
 		if w.failed == nil {
 			w.failed = map[string]bool{}
@@ -210,7 +292,8 @@ func (w *Worker) makePreviews(ctx context.Context, v store.Version) {
 	w.mu.Lock()
 	w.status.PreviewsMade++
 	w.mu.Unlock()
-	w.Log.Info("previews made", "file", v.RelPath, "count", man.Count,
+	w.finish(task, false, plural(man.Count, "preview frame"))
+	w.Log.Debug("previews made", "file", v.RelPath, "count", man.Count,
 		"took", time.Since(start).Round(100*time.Millisecond))
 }
 
@@ -234,6 +317,15 @@ func (w *Worker) detectSeason(ctx context.Context, seasonID string) {
 		seen[f.Episode] = true
 		eps = append(eps, f)
 	}
+	if len(eps) == 0 {
+		return
+	}
+	// The season's folder names the job (the show and season, usually).
+	task := w.begin("intros", "intro detection", eps[0].Path)
+	task.Name = filepath.Base(filepath.Dir(eps[0].Path))
+	w.mu.Lock()
+	w.status.Current.Name = task.Name
+	w.mu.Unlock()
 	start := time.Now()
 	prints := make([][]uint32, len(eps))
 	readable := make([]bool, len(eps))
@@ -241,7 +333,7 @@ func (w *Worker) detectSeason(ctx context.Context, seasonID string) {
 		if ctx.Err() != nil {
 			return
 		}
-		w.setDoing("intro detection: " + f.Path)
+		w.step("intro detection", f.Path)
 		samples, err := intro.Decode(ctx, w.Tool.Path(), f.Path, introAudio)
 		if err != nil {
 			w.Log.Warn("intro audio", "file", f.Path, "err", err)
@@ -280,6 +372,18 @@ func (w *Worker) detectSeason(ctx context.Context, seasonID string) {
 	w.status.IntrosFound += n
 	w.status.SeasonsDone++
 	w.mu.Unlock()
+	unread := 0
+	for _, ok := range readable {
+		if !ok {
+			unread++
+		}
+	}
+	result := fmt.Sprintf("%d of %d episodes have an intro", n, len(eps))
+	if unread > 0 {
+		result += fmt.Sprintf(", %d couldn't be read", unread)
+	}
+	task.Path = filepath.Dir(eps[0].Path)
+	w.finish(task, unread == len(eps), result)
 	w.Log.Info("intro detection", "season", seasonID, "episodes", len(eps), "intros", n,
 		"took", time.Since(start).Round(100*time.Millisecond))
 }
@@ -291,4 +395,23 @@ func containsVersion(list []store.IntroCandidate, id string) bool {
 		}
 	}
 	return false
+}
+
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
+}
+
+// shortErr keeps an error to its first line, for the log on the page.
+func shortErr(err error) string {
+	s := err.Error()
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 160 {
+		s = s[:160] + "…"
+	}
+	return s
 }

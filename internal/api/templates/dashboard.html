@@ -6,7 +6,7 @@
   <tr><th>Library</th><th>Contents</th><th>Needs a look</th><th>Files</th><th>Last scan</th><th>Status</th><th></th></tr>
   {{range .}}
   <tr>
-    <td><a href="/ui/libraries/{{.ID}}"><strong>{{.Name}}</strong></a><br><span class="quiet mono">{{.Path}}</span><br><span class="badge">{{if eq .Kind "tv"}}TV shows{{else}}Movies{{end}}</span></td>
+    <td><a href="/ui/libraries/{{.ID}}"><strong>{{.Name}}</strong></a><br><span class="quiet mono">{{range $i, $f := .Folders}}{{if $i}}<br>{{end}}{{$f}}{{else}}{{.Path}}{{end}}</span><br><span class="badge">{{if eq .Kind "tv"}}TV shows{{else}}Movies{{end}}</span></td>
     <td>{{if eq .Kind "tv"}}{{.Stats.Shows}} shows<br>{{.Stats.Episodes}} episodes{{else}}{{.Stats.Movies}} movies{{end}}</td>
     <td>
       {{if .Stats.Unmatched}}<a href="/ui/libraries/{{.ID}}?tab=review"><span class="badge warn">{{.Stats.Unmatched}} unmatched</span></a><br>{{end}}
@@ -43,7 +43,7 @@
 <h2>Add a library</h2>
 <form class="card row" method="post" action="/ui/libraries">
   <div><label for="kind">What's in it</label>
-    <select id="kind" name="kind"><option value="movies">Movies</option><option value="tv">TV shows</option></select></div>
+    <select id="kind" name="kind"><option value="movies">Movies</option><option value="tv">TV shows</option><option value="other">Other videos (no metadata)</option></select></div>
   <div style="flex: 1 1 320px"><label for="path">Folder on this server</label>
     <input id="path" name="path" placeholder="/media/Movies" style="width: 100%" required></div>
   <div><label for="name">Name (optional)</label><input id="name" name="name" placeholder="Movies"></div>

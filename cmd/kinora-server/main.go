@@ -21,11 +21,22 @@
 //	KINORA_TRICKPLAY   preview thumbnails for skipping (about 5 MB per movie)
 //	KINORA_INTROS      find TV intros for "Skip intro"
 //	KINORA_WATCH       seconds between checks of library folders for new files (default 60)
+//
+// Limits:
+//
+//	KINORA_MAX_TRANSCODES  conversions at once (default 6 with a graphics card encoder, else 3)
+//
+// Remote access (turned on in the web manager, under Remote access):
+//
+//	KINORA_IROH            path to kinora-iroh (default: next to the server, or on PATH)
+//	KINORA_TUNNEL_LISTEN   loopback address kinora-iroh delivers connections to (default 127.0.0.1:8421)
 package main
 
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -42,11 +53,15 @@ import (
 
 	"kinora/internal/api"
 	"kinora/internal/auth"
+	"kinora/internal/cloud"
 	"kinora/internal/ffmpeg"
 	"kinora/internal/images"
 	"kinora/internal/jobs"
 	"kinora/internal/match"
+	"kinora/internal/metrics"
+	"kinora/internal/pgs"
 	"kinora/internal/probe"
+	"kinora/internal/remote"
 	"kinora/internal/scanner"
 	"kinora/internal/store"
 	"kinora/internal/tmdb"
@@ -138,6 +153,7 @@ type deps struct {
 	scanner *scanner.Scanner
 	images  *images.Cache
 	log     *slog.Logger
+	logs    *metrics.LogRing
 }
 
 func open(c config) (*deps, error) {
@@ -145,7 +161,9 @@ func open(c config) (*deps, error) {
 	if c.debug {
 		level = slog.LevelDebug
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	// Warnings and errors are also kept for the metrics page.
+	logs := &metrics.LogRing{}
+	log := slog.New(logs.Handler(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 	if err := os.MkdirAll(c.dataDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -153,7 +171,7 @@ func open(c config) (*deps, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &deps{store: st, log: log}
+	d := &deps{store: st, log: log, logs: logs}
 	d.prober = &probe.Prober{Binary: c.ffprobe}
 	d.ffmpeg = &ffmpeg.Tool{Binary: ffmpegPath(c), Log: log}
 	if c.tmdbKey != "" {
@@ -228,24 +246,52 @@ func serve(args []string) error {
 		d.log.Warn(w)
 	}
 
+	// The web app: KINORA_WEB, or a folder named web next to the server.
+	webDir := env("KINORA_WEB", "")
+	if webDir == "" {
+		if exe, err := os.Executable(); err == nil {
+			if fi, err := os.Stat(filepath.Join(filepath.Dir(exe), "web", "index.html")); err == nil && !fi.IsDir() {
+				webDir = filepath.Join(filepath.Dir(exe), "web")
+			}
+		}
+	}
+
 	srv := &api.Server{
 		Store: d.store, Scanner: d.scanner, Matcher: d.matcher, Images: d.images,
 		Watch: &watch.Service{Store: d.store}, Log: d.log, Version: version,
-		BaseCtx: ctx, Warnings: warnings, TMDB: d.tmdb, FFprobe: c.ffprobe,
+		BaseCtx: ctx, Warnings: warnings, TMDB: d.tmdb, FFprobe: c.ffprobe, WebDir: webDir,
+		Logs: d.logs, DataDir: c.dataDir,
 	}
+	// Readings for the metrics page: every 5 s, the last day in memory.
+	srv.Metrics = &metrics.Collector{Streams: srv.StreamCounts}
+	go srv.Metrics.Run(ctx)
 	if ffmpegOK {
 		// Check hardware encoders now rather than on the first stream.
 		go d.ffmpeg.Caps()
 		if feature("KINORA_TRANSCODE") {
 			srv.Transcoder = &transcode.Transcoder{Tool: d.ffmpeg, Log: d.log}
+			// KINORA_MAX_TRANSCODES caps conversions at once (default 6 with
+			// a graphics card encoder, else 3).
+			if n, err := strconv.Atoi(env("KINORA_MAX_TRANSCODES", "0")); err == nil && n > 0 {
+				srv.Transcoder.MaxJobs = n
+			}
 			srv.Transcoder.Init()
+			// HLS for iPhones and Safari, written under the cache (left over
+			// sessions from a previous run are cleared first).
+			hlsDir := filepath.Join(c.dataDir, "cache", "hls")
+			_ = os.RemoveAll(hlsDir)
+			srv.HLS = &transcode.HLS{T: srv.Transcoder, Dir: hlsDir}
 		}
-		worker := &jobs.Worker{Store: d.store, Tool: d.ffmpeg, Log: d.log, Intros: feature("KINORA_INTROS")}
+		srv.Subtitles = &transcode.Subtitles{Tool: d.ffmpeg, Dir: filepath.Join(c.dataDir, "cache", "subtitles")}
+		srv.PGS = &pgs.Extractor{Tool: d.ffmpeg, Dir: filepath.Join(c.dataDir, "cache", "pgs"), Log: d.log}
+		worker := &jobs.Worker{Store: d.store, Tool: d.ffmpeg, Log: d.log, Intros: feature("KINORA_INTROS"),
+			ThumbDir: filepath.Join(c.dataDir, "cache", "thumbs")}
 		if feature("KINORA_TRICKPLAY") {
 			worker.Trickplay = &trickplay.Maker{Tool: d.ffmpeg, Dir: filepath.Join(c.dataDir, "cache", "trickplay")}
 			srv.Trickplay = worker.Trickplay
 		}
-		if worker.Trickplay != nil || worker.Intros {
+		// Always on: it also makes pictures for "Other videos" titles.
+		{
 			srv.Jobs = worker
 			d.scanner.OnDone = func(int64) { worker.Kick() }
 			go worker.Run(ctx)
@@ -266,7 +312,9 @@ func serve(args []string) error {
 				}
 				roots := make([]watcher.Root, 0, len(libs))
 				for _, l := range libs {
-					roots = append(roots, watcher.Root{LibraryID: l.ID, Path: l.Path})
+					for _, f := range l.Folders {
+						roots = append(roots, watcher.Root{LibraryID: l.ID, Path: f})
+					}
 				}
 				return roots, nil
 			},
@@ -274,9 +322,14 @@ func serve(args []string) error {
 		}
 		go w.Run(ctx)
 	}
+	// One handler for both listeners, so they share sign-in limits.
+	handler := srv.Handler()
+	startRemote(ctx, d, srv, handler, c.dataDir)
+	startCloud(ctx, d, srv, handler, c)
+
 	httpSrv := &http.Server{
 		Addr:              c.listen,
-		Handler:           srv.Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		// No write timeout: streams run for hours.
@@ -498,7 +551,7 @@ func libraryCmd(args []string) error {
 		for _, l := range libs {
 			st, _ := d.store.LibraryStats(ctx, l.ID)
 			fmt.Printf("%d\t%s\t%s\t%s\tmovies=%d shows=%d episodes=%d unmatched=%d files=%d\n",
-				l.ID, l.Name, l.Kind, l.Path, st.Movies, st.Shows, st.Episodes, st.Unmatched, st.Files)
+				l.ID, l.Name, l.Kind, strings.Join(l.Folders, ", "), st.Movies, st.Shows, st.Episodes, st.Unmatched, st.Files)
 		}
 	default:
 		return fmt.Errorf("unknown library subcommand %q", sub)
@@ -543,4 +596,89 @@ func scanCmd(args []string) error {
 		}
 	}
 	return nil
+}
+
+// startCloud links the server to a Kinara account (when KINORA_CLOUD_URL
+// is set) and keeps it reachable from anywhere: direct HTTPS with a
+// certificate for its own names, a router port opened by UPnP or NAT-PMP,
+// and the cloud's relay for players that can't connect directly.
+func startCloud(ctx context.Context, d *deps, srv *api.Server, handler http.Handler, c config) {
+	url := env("KINORA_CLOUD_URL", "")
+	if url == "" || url == "off" {
+		return
+	}
+	httpsPort, _ := strconv.Atoi(env("KINORA_HTTPS_PORT", "32443"))
+	manual, _ := strconv.Atoi(env("KINORA_PUBLIC_PORT", "0"))
+	lanPort, _ := strconv.Atoi(strings.TrimPrefix(portOf(c.listen), ":"))
+	m := cloud.New(cloud.Settings{
+		CloudURL:   url,
+		DataDir:    c.dataDir,
+		LANPort:    lanPort,
+		HTTPSPort:  httpsPort,
+		ManualPort: manual,
+		NoPortMap:  env("KINORA_PORT_MAPPING", "on") == "off",
+		Version:    version,
+		Name: func() string {
+			h, _ := os.Hostname()
+			return h
+		},
+	}, handler, d.log)
+	if srv.Remote != nil {
+		sc := srv.Remote
+		m.Iroh = func() (string, string) {
+			in := sc.Info()
+			return in.Ticket, in.NodeID
+		}
+		// The sidecar uses our own iroh relay once the server is linked.
+		sc.RelayURLs = func() []string {
+			if st := m.State(); st != nil {
+				return st.IrohRelays
+			}
+			return nil
+		}
+	}
+	srv.Cloud = m
+	go m.Run(ctx)
+}
+
+// startRemote serves the tunnel listener and supervises kinora-iroh, which
+// carries apps' connections from anywhere to that listener. It runs only
+// while remote access is turned on, and never before an admin account
+// exists.
+func startRemote(ctx context.Context, d *deps, srv *api.Server, handler http.Handler, dataDir string) {
+	secretBytes := make([]byte, 32)
+	if _, err := rand.Read(secretBytes); err != nil {
+		d.log.Error("remote access off: no random secret", "err", err)
+		return
+	}
+	secret := hex.EncodeToString(secretBytes)
+	target := env("KINORA_TUNNEL_LISTEN", "127.0.0.1:8421")
+	sc := &remote.Sidecar{
+		DataDir: dataDir,
+		Target:  target,
+		Secret:  secret,
+		Log:     d.log,
+		Blocked: func(ctx context.Context) ([]string, error) {
+			bs, err := d.store.BlockedNodes(ctx)
+			ids := make([]string, 0, len(bs))
+			for _, b := range bs {
+				ids = append(ids, b.NodeID)
+			}
+			return ids, err
+		},
+		Allowed: func(ctx context.Context) bool {
+			n, err := d.store.CountUsers(ctx)
+			return err == nil && n > 0
+		},
+	}
+	srv.Remote = sc
+	go func() {
+		if err := remote.Serve(ctx, target, secret, handler, d.log); err != nil {
+			d.log.Error("remote access: tunnel listener failed", "listen", target, "err", err)
+		}
+	}()
+	if rs, err := d.store.GetRemoteSettings(ctx); err == nil {
+		sc.Configure(rs.Enabled, rs.UDPPort)
+	}
+	go sc.Run(ctx)
 }

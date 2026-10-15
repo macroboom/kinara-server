@@ -56,6 +56,36 @@ kinora-server scan                              # scan everything now and wait
 | `-rescan` | | `6h` (0 turns it off) |
 | `-scan-workers` | `KINORA_SCAN_WORKERS` | by drive type: SSD one per CPU up to 8, hard drive 2, network 6 |
 
+### Remote play with a Kinara account
+
+Set `KINORA_CLOUD_URL` to the Kinara cloud (`https://cloud.<domain>`), restart,
+then open the manager, **Remote access**, and choose **Link to my Kinara
+account**. Approve the code it shows at the cloud's `/link` page. From then on
+the server:
+
+- reports its addresses to the cloud every minute,
+- opens a port on the router by NAT-PMP or UPnP (or uses the one you
+  forwarded, `KINORA_PUBLIC_PORT`),
+- gets a certificate for `*.<server-id>.direct.<domain>` and serves HTTPS on
+  `KINORA_HTTPS_PORT`, so players connect straight to it over IPv6 or IPv4,
+- keeps a few connections open to the cloud's relay, so players that can't
+  connect directly (Roku, browsers away from home) still reach it.
+
+Apps signed in to the account get a short-lived token from the cloud and
+exchange it at `POST /api/v1/auth/cloud` for a normal session; the server
+checks the token with the cloud's public key, without calling the cloud.
+Requests from outside the home network (relay, HTTPS from the internet, the
+iroh tunnel) can't create accounts or set the server up.
+
+| Environment | Default | Meaning |
+| --- | --- | --- |
+| `KINORA_CLOUD_URL` | none (off) | The Kinara cloud |
+| `KINORA_HTTPS_PORT` | `32443` | Port of the HTTPS listener (0: relay only) |
+| `KINORA_PUBLIC_PORT` | none | A port you forwarded on the router to `KINORA_HTTPS_PORT` |
+| `KINORA_PORT_MAPPING` | `on` | `off` stops UPnP / NAT-PMP |
+
+On Windows, allow `kinora-server.exe` through the firewall on the HTTPS port.
+
 ## Checking playback without an app
 
 Each file on an item's page shows a stream URL with your token. Paste it into
@@ -108,6 +138,7 @@ internal/store        SQLite schema, migrations, all SQL
 internal/auth         password hashing, device tokens, login rate limits
 internal/watch        progress, watched state, next episode
 internal/api          JSON API, streaming, built-in web page
+internal/cloud        Kinara account link: presence, router port, certificate, HTTPS, relay
 ```
 
 ## Known limits of this version

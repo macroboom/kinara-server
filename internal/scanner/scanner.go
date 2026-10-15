@@ -64,6 +64,7 @@ type Scanner struct {
 
 	mu       sync.Mutex
 	progress map[int64]*Progress
+	again    map[int64]bool // scan once more when the running one ends
 }
 
 // Progress returns a copy of a library's scan progress.
@@ -115,7 +116,35 @@ func (s *Scanner) Start(ctx context.Context, libraryID int64) error {
 		if s.OnDone != nil {
 			s.OnDone(libraryID)
 		}
+		s.mu.Lock()
+		again := s.again[libraryID]
+		delete(s.again, libraryID)
+		s.mu.Unlock()
+		if again {
+			_ = s.Start(ctx, libraryID)
+		}
 	}()
+	return nil
+}
+
+// Queue starts a scan, or if one is running, runs another as soon as it
+// ends, so a folder added mid-scan is still picked up.
+func (s *Scanner) Queue(ctx context.Context, libraryID int64) error {
+	err := s.Start(ctx, libraryID)
+	if !errors.Is(err, ErrBusy) {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p, ok := s.progress[libraryID]; ok && p.Running {
+		if s.again == nil {
+			s.again = map[int64]bool{}
+		}
+		s.again[libraryID] = true
+		return nil
+	}
+	// It ended between the two checks.
+	go func() { _ = s.Start(ctx, libraryID) }()
 	return nil
 }
 
@@ -159,9 +188,15 @@ func (s *Scanner) run(ctx context.Context, libraryID int64) error {
 		return err
 	}
 	scanStart := time.Now().Unix()
-	s.Log.Info("scan started", "library", lib.Name, "path", lib.Path)
+	s.Log.Info("scan started", "library", lib.Name, "folders", lib.Folders)
 
-	disk := DetectDisk(lib.Path)
+	// With folders on different drives, pace the scan for the slowest one.
+	disk := DetectDisk(lib.Folders[0])
+	for _, f := range lib.Folders[1:] {
+		if d := DetectDisk(f); WorkersFor(d) < WorkersFor(disk) {
+			disk = d
+		}
+	}
 	workers := s.Workers
 	if workers <= 0 {
 		workers = WorkersFor(disk)
@@ -249,11 +284,14 @@ func (s *Scanner) run(ctx context.Context, libraryID int64) error {
 	}
 	s.update(libraryID, func(p *Progress) { p.Missing = missing; p.Phase = "matching" })
 
-	if s.Matcher == nil {
+	switch {
+	case lib.Kind == store.KindOther:
+		// Plain videos keep their file names; nothing to look up.
+	case s.Matcher == nil:
 		s.update(libraryID, func(p *Progress) {
 			p.Message = "No TMDB key set: items keep their file-name titles until one is added."
 		})
-	} else {
+	default:
 		st, err := s.Matcher.MatchLibrary(ctx, libraryID)
 		s.update(libraryID, func(p *Progress) { p.Matched, p.Unmatched = st.Matched, st.Unmatched })
 		if err != nil {
@@ -276,11 +314,27 @@ var skipDirs = map[string]bool{
 // placed. Rip them to a single file (MakeMKV) to add them.
 var discDirs = map[string]bool{"bdmv": true, "video_ts": true, "certificate": true}
 
-// walk sends new and changed files to jobs. It returns the IDs of files that
-// haven't changed, so they can be marked as seen in one batch, and the IDs of
-// known files that are now skipped (extras, samples, disc folders), so stale
-// "can't place" records can be removed.
+// walk sends new and changed files in every library folder to jobs. It
+// returns the IDs of files that haven't changed, so they can be marked as
+// seen in one batch, and the IDs of known files that are now skipped
+// (extras, samples, disc folders), so stale "can't place" records can be
+// removed. A folder that can't be read fails the scan, so an unplugged
+// drive is never taken as "every file deleted".
 func (s *Scanner) walk(ctx context.Context, lib store.Library, known map[string]store.Version, jobs chan<- job) (unchanged, dropped []string, err error) {
+	for _, root := range lib.Folders {
+		u, d, err := s.walkFolder(ctx, lib, root, known, jobs)
+		unchanged = append(unchanged, u...)
+		dropped = append(dropped, d...)
+		if err != nil {
+			return unchanged, dropped, err
+		}
+	}
+	return unchanged, dropped, nil
+}
+
+// walkFolder walks one library folder. Paths in the library are relative to
+// the folder the file was found in.
+func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root string, known map[string]store.Version, jobs chan<- job) (unchanged, dropped []string, err error) {
 	stable := s.StableAge
 	if stable == 0 {
 		stable = time.Minute
@@ -294,20 +348,20 @@ func (s *Scanner) walk(ctx context.Context, lib store.Library, known map[string]
 			}
 		}
 	}
-	err = filepath.WalkDir(lib.Path, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if err != nil {
-			if path == lib.Path {
-				return fmt.Errorf("library folder: %w", err)
+			if path == root {
+				return fmt.Errorf("library folder %s: %w", root, err)
 			}
 			s.Log.Warn("walk", "path", path, "err", err)
 			return nil
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path == lib.Path {
+			if path == root {
 				return nil
 			}
 			lower := strings.ToLower(name)
@@ -331,10 +385,10 @@ func (s *Scanner) walk(ctx context.Context, lib store.Library, known map[string]
 		if err != nil {
 			return nil
 		}
-		rel, _ := filepath.Rel(lib.Path, path)
+		rel, _ := filepath.Rel(root, path)
 		s.update(lib.ID, func(p *Progress) { p.FilesSeen++ })
 		parsed := parse.Parse(rel)
-		if parsed.Sample || parsed.Extra {
+		if lib.Kind != store.KindOther && (parsed.Sample || parsed.Extra) {
 			s.update(lib.ID, func(p *Progress) { p.Skipped++ })
 			if v, ok := known[path]; ok {
 				dropped = append(dropped, v.ID)
@@ -371,7 +425,7 @@ func (s *Scanner) walk(ctx context.Context, lib store.Library, known map[string]
 // placeFor says where a parsed file belongs in this library: "movie",
 // "episode", or "" if it can't be placed.
 func (s *Scanner) placeFor(lib store.Library, p parse.Result) string {
-	if p.Sample || p.Extra {
+	if lib.Kind != store.KindOther && (p.Sample || p.Extra) {
 		return ""
 	}
 	switch lib.Kind {
@@ -380,6 +434,9 @@ func (s *Scanner) placeFor(lib store.Library, p parse.Result) string {
 			return "episode"
 		}
 		return ""
+	case store.KindOther:
+		// Every video is its own title, whatever its name looks like.
+		return "video"
 	default:
 		// A Movies folder: treat everything as a movie. A file that looks
 		// like an episode will most likely end up unmatched for review.
@@ -393,7 +450,7 @@ func (s *Scanner) placeFor(lib store.Library, p parse.Result) string {
 // file stores one probed file and links it to its item.
 func (s *Scanner) file(ctx context.Context, lib store.Library, r result) error {
 	p := parse.Parse(r.rel)
-	if p.Sample || p.Extra {
+	if lib.Kind != store.KindOther && (p.Sample || p.Extra) {
 		s.update(lib.ID, func(pr *Progress) { pr.Skipped++ })
 		return nil
 	}
@@ -416,9 +473,12 @@ func (s *Scanner) file(ctx context.Context, lib store.Library, r result) error {
 		v.DVProfile = r.probe.DVProfile
 	}
 	v.Part = p.Part
+	if lib.Kind == store.KindOther {
+		v.Part = 0 // every file is its own title
+	}
 
 	if v.ItemID == "" {
-		id, err := s.place(ctx, lib, p)
+		id, err := s.place(ctx, lib, p, r.rel)
 		if err != nil {
 			return err
 		}
@@ -449,8 +509,18 @@ func (s *Scanner) file(ctx context.Context, lib store.Library, r result) error {
 
 // place finds or creates the item a file belongs to. It returns "" when the
 // file can't be placed (for example a TV library file with no episode number).
-func (s *Scanner) place(ctx context.Context, lib store.Library, p parse.Result) (string, error) {
+func (s *Scanner) place(ctx context.Context, lib store.Library, p parse.Result, rel string) (string, error) {
 	switch s.placeFor(lib, p) {
+	case "video":
+		// An "Other videos" file: named after the file, never matched.
+		// The parsed title is the whole path, so two files with the same
+		// name in different folders stay two titles.
+		title := VideoTitle(rel)
+		return s.findOrCreate(ctx, store.Item{
+			LibraryID: lib.ID, Kind: store.ItemMovie, Title: title,
+			SortTitle: parse.SortTitle(title), ParsedTitle: strings.ToLower(filepath.ToSlash(rel)),
+			MatchState: store.MatchManual, SeasonNumber: -1, EpisodeNumber: -1,
+		}, store.ProviderTMDBMovie, parse.Result{})
 	case "movie":
 		return s.findOrCreate(ctx, store.Item{
 			LibraryID: lib.ID, Kind: store.ItemMovie, Title: p.Title,
@@ -523,4 +593,19 @@ func (s *Scanner) findOrCreate(ctx context.Context, it store.Item, tmdbProvider 
 		}
 	}
 	return it.ID, nil
+}
+
+// VideoTitle names an "Other videos" file: its file name without the
+// extension, with dots and underscores used as spaces turned into spaces.
+func VideoTitle(rel string) string {
+	base := filepath.Base(filepath.FromSlash(rel))
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	if !strings.Contains(base, " ") {
+		base = strings.NewReplacer(".", " ", "_", " ").Replace(base)
+	}
+	base = strings.Join(strings.Fields(base), " ")
+	if base == "" {
+		return "Untitled video"
+	}
+	return base
 }

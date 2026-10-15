@@ -1,9 +1,27 @@
+# Server data and builds
 /kinora-data/
 /kinora-server
+/kinora-server.exe
+/tmp/
+
+# SQLite
 *.db
 *.db-wal
 *.db-shm
+
+# Settings (keep the example)
 .env
 .env.*
 !.env.example
-/tmp/
+
+# iroh sidecar (Rust): build output and the copied binary
+/sidecar/target/
+/kinora-iroh
+/kinora-iroh.exe
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

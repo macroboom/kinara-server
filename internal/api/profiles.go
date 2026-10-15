@@ -67,7 +67,7 @@ func (req profileRequest) apply(p *store.Profile) error {
 		case *req.Pin == "":
 			p.PinHash = ""
 		case rePin.MatchString(*req.Pin):
-			h, err := auth.HashPassword(*req.Pin)
+			h, err := auth.HashPIN(*req.Pin)
 			if err != nil {
 				return err
 			}
@@ -361,6 +361,8 @@ func itemFilterFrom(r *http.Request, u store.User) store.ItemFilter {
 	f.MaxRuntime, _ = strconv.Atoi(q.Get("maxRuntime"))
 	f.BestQuality = q.Get("quality") == "best"
 	f.Genre = strings.TrimSpace(q.Get("genre"))
+	// other=only lists every "Other videos" library together.
+	f.OnlyOther = q.Get("other") == "only"
 	return f
 }
 
@@ -386,7 +388,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, u store.User) {
 	if limit <= 0 || limit > 100 {
 		limit = 40
 	}
-	items, err := s.Store.ListItems(r.Context(), store.ItemFilter{Search: q, Limit: limit, ProfileID: u.ProfileID})
+	items, err := s.Store.ListItems(r.Context(), store.ItemFilter{Search: q, Limit: limit, ProfileID: u.ProfileID, IncludeOther: true, IncludeUnmatched: true})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

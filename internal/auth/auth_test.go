@@ -57,3 +57,16 @@ func TestLimiter(t *testing.T) {
 		t.Error("reset should allow again")
 	}
 }
+
+func TestHashPIN(t *testing.T) {
+	h, err := HashPIN("1234")
+	if err != nil {
+		t.Fatalf("a 4-digit PIN must hash: %v", err)
+	}
+	if !CheckPassword(h, "1234") || CheckPassword(h, "0000") {
+		t.Fatal("PIN check wrong")
+	}
+	if _, err := HashPassword("1234"); err == nil {
+		t.Fatal("short passwords must still be refused")
+	}
+}
