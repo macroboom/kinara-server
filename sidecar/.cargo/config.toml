@@ -2,3 +2,15 @@
 # without the Visual C++ redistributable installed.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# Android: 16 KB page alignment for the tunnel library. Google Play requires
+# it for apps targeting Android 15 and later; NDK r28 and newer already do
+# this, the flag makes older NDKs match.
+[target.aarch64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+[target.x86_64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+[target.armv7-linux-androideabi]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]

@@ -1716,6 +1716,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kinora-tunnel-ffi"
+version = "0.1.0"
+dependencies = [
+ "jni-sys 0.3.1",
+ "kinora-tunnel",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

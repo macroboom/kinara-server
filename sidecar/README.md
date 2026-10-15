@@ -59,6 +59,8 @@ sidecar/
   crates/kinora-connect/        binary: test client CLI over the library API
   crates/kinora-testserver/     binary: stand-in for the Go 8421 listener
   crates/kinora-e2e/            binary: runs the end-to-end test list
+  crates/kinora-tunnel-ffi/     library for the apps: C ABI (iOS) and JNI (Android)
+    include/kinora_tunnel.h     the C interface
 ```
 
 ## Protocol
@@ -719,35 +721,59 @@ tunnel.stop();                                 // idempotent, any thread
   `Vec` and plain structs, plus one error enum, so uniffi can wrap it as is.
   The handle owns its own small tokio runtime.
 
-### Mobile native module: next steps
+### The apps: kinora-tunnel-ffi
 
-1. Add `crates/kinora-tunnel-ffi` with `crate-type = ["cdylib", "staticlib"]`,
-   depending on `kinora-tunnel` with `default-features = false,
-   features = ["mdns"]` (drops clap). Wrap `TunnelClient` in a
-   `#[derive(uniffi::Object)]` type, mirror `ClientConfig` / `ClientStatus`
-   as `uniffi::Record`s and `TunnelError` as `uniffi::Error`, and call
-   `uniffi::setup_scaffolding!()`.
-2. Android: `cargo install cargo-ndk`, `rustup target add
-   aarch64-linux-android armv7-linux-androideabi x86_64-linux-android`, then
-   `cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o <module>/android/src/main/jniLibs build --release -p kinora-tunnel-ffi`
-   and generate Kotlin with `uniffi-bindgen generate --library <libkinora_tunnel_ffi.so> --language kotlin`
-   (uses JNA).
-3. iOS: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios`,
-   build the staticlib for each, `lipo` the two simulator slices together,
-   `xcodebuild -create-xcframework` with the device and simulator libraries
-   plus headers, and generate Swift with `uniffi-bindgen --language swift`.
-4. Expo: a local Expo module exposing `start`, `stop`, `status`, `localPort`
-   and `networkChange` to JS. Call `networkChange()` from a NetInfo listener.
-5. Platform settings the apps will need:
-   * Android 9+ blocks cleartext HTTP by default. Allow `127.0.0.1` in a
-     `network_security_config` domain entry.
-   * iOS ATS: set `NSAllowsLocalNetworking` so AVPlayer can load
-     `http://127.0.0.1`.
-   * LAN discovery: Android needs a `WifiManager.MulticastLock` for mDNS;
-     iOS needs `NSLocalNetworkUsageDescription` and the Bonjour service
-     iroh-mdns advertises (service name `irohv1`; confirm the exact Bonjour
-     type on device). Without these the app still connects through
-     discovery and the relay.
-   * iOS suspends background apps, which ends the tunnel. Background audio
-     playback needs the audio background mode, and the app should restart the
-     tunnel on resume.
+`crates/kinora-tunnel-ffi` wraps `TunnelClient` for the Kinara apps. Instead
+of uniffi (which needs a code generation step and JNA), it has two small
+hand-written bindings over one JSON API (`src/api.rs`):
+
+* `src/c.rs`: a C ABI, declared in `include/kinora_tunnel.h`, for Swift.
+* `src/android.rs`: JNI entry points for the Kotlin object
+  `expo.modules.kinoratunnel.TunnelNative` in the app's
+  `modules/kinora-tunnel`. The function names spell out that package, class
+  and method names; rename both sides together.
+
+Calls: start (JSON settings in; handle, port, url and node ID out), status
+(the `ClientStatus` fields plus "ok"), network change, stop, stop all, and
+drain logs (log lines kept in memory, since phones have no console; the
+Android module copies them to Logcat under the tag `KinoraTunnel`). Every
+answer is JSON with "ok": true, or "ok": false and "error". Non-ASCII is
+written as `\uXXXX`, so the same bytes are valid UTF-8 and Java's modified
+UTF-8. Panics are caught and become error answers.
+
+Settings: `server` (ticket or node ID), `dataDir` (the Android module fills
+it in: the app's files folder plus `kinora-tunnel`, where the device key
+lives so its node ID stays the same), `relayUrls` (the Kinara relay from
+kinora-cloud; a non-empty list means custom relays), `relayOnly`,
+`discoveryN0`, `mdns`, `localPort`, `connectTimeoutMs`.
+
+It depends on `kinora-tunnel` by path with `default-features = false,
+features = ["mdns"]`, not through the workspace, so clap stays out of the
+app.
+
+**Android build.** The app runs it: `npm run tunnel` in kinora-app calls
+
+```
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o <app>/modules/kinora-tunnel/android/src/main/jniLibs --platform 24 build -p kinora-tunnel-ffi --release
+```
+
+with this folder as the working directory (it looks for
+`../kinora-server/sidecar` next to the app, or `KINORA_SIDECAR`).
+`.cargo/config.toml` adds 16 KB page alignment for the Android targets,
+which Google Play requires for apps targeting Android 15 and later.
+
+Android settings the app already has: cleartext HTTP is allowed
+(`usesCleartextTraffic`), which covers `http://127.0.0.1`. The module's
+manifest adds ACCESS_NETWORK_STATE (network change callbacks) and
+CHANGE_WIFI_MULTICAST_STATE (a multicast lock while a tunnel runs, for mDNS).
+
+**iOS (not done yet).** Plan: build the staticlib for `aarch64-apple-ios`
+and `aarch64-apple-ios-sim` in an EAS `eas-build-pre-install` hook (Rust
+installed on the EAS Mac), make an xcframework with
+`include/kinora_tunnel.h`, and add a Swift side to the Expo module that
+calls the C functions. iOS settings: `NSAllowsLocalNetworking` (already set
+by the app), `NSLocalNetworkUsageDescription` (already set), and the
+Bonjour type iroh's mDNS uses (service name `irohv1`; confirm the exact type
+on a device). iOS suspends background apps, which ends the tunnel; the app
+finds the server again when it comes back. Apple TV (tvOS) is a tier 3 Rust
+target and stays without the tunnel for now.

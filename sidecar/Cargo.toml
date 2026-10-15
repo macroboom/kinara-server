@@ -6,6 +6,7 @@ members = [
     "crates/kinora-connect",
     "crates/kinora-testserver",
     "crates/kinora-e2e",
+    "crates/kinora-tunnel-ffi",
 ]
 
 [workspace.package]
