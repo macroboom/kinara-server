@@ -26,7 +26,48 @@ type Result struct {
 	// HDR is "", "hdr10", "hlg" or "dolby_vision".
 	HDR       string
 	DVProfile int
-	Streams   []store.Stream
+	// DV is the full Dolby Vision configuration (zero when not Dolby Vision).
+	DV      DolbyVision
+	Streams []store.Stream
+}
+
+// DolbyVision is a file's Dolby Vision configuration record.
+type DolbyVision struct {
+	Profile int `json:"profile"`
+	Level   int `json:"level"`
+	// BL, EL and RPU say which parts are present: the base layer every
+	// player decodes, profile 7's enhancement layer, and the Dolby Vision
+	// metadata.
+	BL  bool `json:"bl"`
+	EL  bool `json:"el"`
+	RPU bool `json:"rpu"`
+	// Compat is what the base layer is without Dolby Vision: 1 or 6 HDR10,
+	// 2 SDR, 4 HLG, 0 nothing usable (profile 5). -1 when not stated.
+	Compat int `json:"compat"`
+}
+
+// Present reports whether this is Dolby Vision at all.
+func (d DolbyVision) Present() bool { return d.Profile > 0 || d.RPU }
+
+// BaseTransfer is what a player without Dolby Vision gets from the base
+// layer: "pq" (HDR10), "hlg", "sdr", or "" when the picture needs the
+// Dolby Vision metadata to look right (profile 5).
+func (d DolbyVision) BaseTransfer() string {
+	if d.Profile == 5 {
+		return ""
+	}
+	switch d.Compat {
+	case 1, 6:
+		return "pq"
+	case 2, 5:
+		return "sdr"
+	case 3, 4:
+		return "hlg"
+	case 0:
+		return ""
+	}
+	// Not stated: profiles 7 and 8 are HDR10 based in practice.
+	return "pq"
 }
 
 // Prober runs ffprobe.
@@ -71,6 +112,25 @@ func (p *Prober) Probe(ctx context.Context, path string) (Result, error) {
 	return Parse(out, filepath.Ext(path))
 }
 
+type sideData struct {
+	Type      string `json:"side_data_type"`
+	DVProfile int    `json:"dv_profile"`
+	DVLevel   int    `json:"dv_level"`
+	BL        int    `json:"bl_present_flag"`
+	EL        int    `json:"el_present_flag"`
+	RPU       int    `json:"rpu_present_flag"`
+	// A pointer: 0 is a real value (profile 5), unlike a missing field.
+	Compat *int `json:"dv_bl_signal_compatibility_id"`
+}
+
+func (sd sideData) dolbyVision() DolbyVision {
+	d := DolbyVision{Profile: sd.DVProfile, Level: sd.DVLevel, BL: sd.BL != 0, EL: sd.EL != 0, RPU: sd.RPU != 0, Compat: -1}
+	if sd.Compat != nil {
+		d.Compat = *sd.Compat
+	}
+	return d
+}
+
 type ffOutput struct {
 	Format struct {
 		FormatName string `json:"format_name"`
@@ -95,10 +155,7 @@ type ffOutput struct {
 			Forced      int `json:"forced"`
 			AttachedPic int `json:"attached_pic"`
 		} `json:"disposition"`
-		SideData []struct {
-			Type      string `json:"side_data_type"`
-			DVProfile int    `json:"dv_profile"`
-		} `json:"side_data_list"`
+		SideData []sideData `json:"side_data_list"`
 	} `json:"streams"`
 }
 
@@ -150,6 +207,7 @@ func Parse(data []byte, ext string) (Result, error) {
 			if strings.Contains(strings.ToLower(sd.Type), "dovi") {
 				r.HDR = "dolby_vision"
 				r.DVProfile = sd.DVProfile
+				r.DV = sd.dolbyVision()
 			}
 		}
 	}
@@ -182,4 +240,41 @@ func containerName(formatName, ext string) string {
 		return formatName[:i]
 	}
 	return formatName
+}
+
+// DV reads just the first video stream's Dolby Vision configuration: a
+// quick look for deciding how to stream a file (the library keeps only the
+// profile). ffprobe "" means ffprobe from PATH.
+func DV(ctx context.Context, ffprobe, path string) (DolbyVision, error) {
+	if ffprobe == "" {
+		ffprobe = "ffprobe"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ffprobe, "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream_side_data", "-print_format", "json", "--", path)
+	out, err := cmd.Output()
+	if err != nil {
+		return DolbyVision{}, fmt.Errorf("ffprobe: %w", err)
+	}
+	return parseDV(out)
+}
+
+func parseDV(out []byte) (DolbyVision, error) {
+	var ff struct {
+		Streams []struct {
+			SideData []sideData `json:"side_data_list"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(out, &ff); err != nil {
+		return DolbyVision{}, fmt.Errorf("ffprobe output: %w", err)
+	}
+	for _, st := range ff.Streams {
+		for _, sd := range st.SideData {
+			if strings.Contains(strings.ToLower(sd.Type), "dovi") {
+				return sd.dolbyVision(), nil
+			}
+		}
+	}
+	return DolbyVision{}, nil
 }

@@ -176,5 +176,5 @@ func TestGPUPipelineArgs(t *testing.T) {
 }
 
 func ffmpegCaps(cuda bool) ffmpeg.Caps {
-	return ffmpeg.Caps{Found: true, H264Encoder: "h264_nvenc", CUDA: cuda, ToneMap: true}
+	return ffmpeg.Caps{Found: true, H264Encoder: "h264_nvenc", HW: ffmpeg.HWNVENC, CUDA: cuda, ToneMap: true}
 }

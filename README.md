@@ -11,7 +11,8 @@ Kinora Cloud. See the architecture plan for the roadmap.
 ## Requirements
 
 - Go 1.24 or newer
-- ffmpeg (for `ffprobe`)
+- ffmpeg (for `ffprobe`); 7.1 or later to stream Dolby Vision profile 7 to
+  Apple players and browsers without converting it
 - A TMDB API key or read access token, free for development at
   https://www.themoviedb.org/settings/api (optional, but without it titles come
   from file names and there is no artwork)
@@ -85,6 +86,82 @@ iroh tunnel) can't create accounts or set the server up.
 | `KINORA_PORT_MAPPING` | `on` | `off` stops UPnP / NAT-PMP |
 
 On Windows, allow `kinora-server.exe` through the firewall on the HTTPS port.
+
+## Dolby Vision and HDR
+
+When a player can't take a file as it is, the server converts it, and
+Dolby Vision gets special care (`internal/transcode/dovi.go`). Players say
+whether they show Dolby Vision with `dovi=1` or `dovi=0` on
+`/transcode/{id}` and `/hls/{id}`:
+
+| File | Player shows Dolby Vision | Player doesn't | Didn't say |
+|---|---|---|---|
+| Profile 5 | copied, tagged `dvh1` in MP4/HLS | converted with libplacebo (needs Vulkan); refused without it, rather than green and purple | as before |
+| Profile 7 | copied (MKV), base layer only in MP4/HLS | HDR10 base layer only | base layer only in MP4/HLS |
+| Profile 8.1 | copied, tagged `dvh1` in MP4/HLS | HDR10 base layer only | as before |
+
+"Base layer only" strips the Dolby Vision metadata and profile 7's second
+layer while copying, with no re-encode. It needs **FFmpeg 7.1 or later**
+(the `dovi_rpu` bitstream filter); the log line `ffmpeg checked` says
+`dolby_vision_strip=true` when it's there. Each file is checked once with a
+two-second test strip; a file that fails it is sent as before.
+
+Converting HDR to SDR: libplacebo when it works (best, and it applies Dolby
+Vision itself), else zscale. The zscale path now declares the source's
+colours first (`setparams`), leftover HDR metadata is removed from the
+frames, and the output is tagged BT.709, so players don't mistake it for
+HDR. Other conversion details:
+
+- Surround to stereo lifts dialogue and limits peaks instead of a plain
+  downmix (which leaves voices quiet); converted AAC smooths Matroska's
+  timestamp gaps (`aresample=async=1`), which some players heard as crackle.
+- Hardware encoders aim at 90% of the bitrate cap with the cap as the peak,
+  instead of padding easy scenes up to the cap.
+- HLS conversions put a keyframe at every 4 s segment boundary.
+- The browser MP4 stream uses `delay_moov`, which copied E-AC-3 (Atmos)
+  needs.
+
+## Graphics cards for converting
+
+The server converts on the graphics card when it finds one that works. It
+tests each with one encoded frame at start, in this order:
+
+| Card | Windows | Linux (and Docker) |
+|---|---|---|
+| NVIDIA | NVENC (driver new enough for your ffmpeg: FFmpeg 8 needs 610+) | NVENC |
+| Intel | Quick Sync (through Direct3D 11) | Quick Sync (through VAAPI, `iHD` driver) |
+| AMD | AMF | VAAPI (Mesa's VA driver) |
+| Apple | | VideoToolbox (macOS) |
+
+The startup log line `ffmpeg checked` names what it picked (`gpu=`,
+`h264_encoder=`, and for VAAPI the device and rate control mode).
+
+Each conversion tries three ways, in order, and moves to the next only when
+ffmpeg fails before anything reached the player:
+
+1. **gpu**: decode, scale and encode on the card. For SDR on NVIDIA, Intel
+   and VAAPI the picture never leaves the card.
+2. **cpu-decode**: decode and scale on the CPU, encode on the card.
+3. **cpu**: everything on the CPU (libx264).
+
+The way that worked is remembered per file for 15 minutes, so seeking or
+playing it again starts there; the log says `trying the next way` when it
+falls back. HDR is tone mapped on the CPU path (libplacebo or zscale)
+before going back to the card for encoding. Intel's and AMD's decoders skip
+H.264 High 10 (10-bit H.264), which goes straight to CPU decoding.
+
+Settings:
+
+- `KINORA_HWACCEL`: `auto` (default), `nvenc`, `qsv`, `vaapi`, `amf`,
+  `videotoolbox`, or `none` to use only the CPU.
+- `KINORA_HW_DEVICE`: on Linux, the render node to use
+  (`/dev/dri/renderD128`); each is tried otherwise. In Docker, pass the
+  card in with `--device /dev/dri:/dev/dri` (Intel/AMD) or the NVIDIA
+  runtime.
+
+NVIDIA is the setup that's been tested. The Intel and AMD commands follow
+what Silo and Jellyfin run; if one fails on your hardware, the fallback
+keeps playback working on the CPU, and the log shows the ffmpeg error.
 
 ## Checking playback without an app
 

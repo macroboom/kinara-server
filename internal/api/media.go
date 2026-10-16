@@ -495,6 +495,10 @@ func (s *Server) transcodeRequest(r *http.Request) (transcode.Request, store.Ver
 	req.MaxBitrate, _ = strconv.Atoi(q.Get("maxBitrate"))
 	req.MaxHeight, _ = strconv.Atoi(q.Get("maxHeight"))
 	req.Segments = q.Get("segments")
+	// "1": the player shows Dolby Vision; "0": it doesn't (see transcode/dovi.go).
+	if d := q.Get("dovi"); d == "1" || d == "0" {
+		req.ClientDV = d
+	}
 	req.MaxAudioChannels, _ = strconv.Atoi(q.Get("audioChannels"))
 	if a := q.Get("audio"); a != "" {
 		idx, err := strconv.Atoi(a)
@@ -523,6 +527,12 @@ func (s *Server) transcodeRequest(r *http.Request) (transcode.Request, store.Ver
 			req.Subtitles = append(req.Subtitles, st)
 		}
 	}
+	for _, st := range streams {
+		if st.Type == "video" {
+			req.SourceProfile = st.Profile // the first one is what's converted
+			break
+		}
+	}
 	if req.Container != "hls" {
 		if err := req.Validate(); err != nil {
 			return req, v, http.StatusBadRequest, err
@@ -547,14 +557,8 @@ func (s *Server) hlsStart(w http.ResponseWriter, r *http.Request, u store.User) 
 		s.Jobs.Prioritize(v.ID)
 	}
 	req.Owner = s.streamOwner(r, v)
+	// HLS.Start tries the slower ways itself when the graphics card fails.
 	id, err := s.HLS.Start(r.Context(), req)
-	if err != nil && !errors.Is(err, transcode.ErrBusy) && r.Context().Err() == nil && s.Transcoder.UsesGPUDecode(req) {
-		// The all-GPU pipeline can fail on a file the card can't decode:
-		// try again the slower way.
-		s.Log.Warn("hls on the gpu failed; trying again with cpu decoding", "file", v.RelPath, "err", err)
-		req.SoftwareDecode = true
-		id, err = s.HLS.Start(r.Context(), req)
-	}
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, transcode.ErrBusy) {

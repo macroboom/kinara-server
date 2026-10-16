@@ -102,3 +102,24 @@ func TestProbeRealFile(t *testing.T) {
 		t.Errorf("streams %+v", r.Streams)
 	}
 }
+
+func TestParseDolbyVisionConfig(t *testing.T) {
+	out := []byte(`{"streams":[{"side_data_list":[{"side_data_type":"DOVI configuration record","dv_version_major":1,
+		"dv_profile":5,"dv_level":6,"rpu_present_flag":1,"el_present_flag":0,"bl_present_flag":1,"dv_bl_signal_compatibility_id":0}]}]}`)
+	d, err := parseDV(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Profile != 5 || d.Level != 6 || !d.RPU || d.EL || !d.BL || d.Compat != 0 || d.BaseTransfer() != "" {
+		t.Errorf("%+v", d)
+	}
+	// A missing compatibility id is "not stated", not 0.
+	d, _ = parseDV([]byte(`{"streams":[{"side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":8}]}]}`))
+	if d.Compat != -1 || d.BaseTransfer() != "pq" {
+		t.Errorf("%+v", d)
+	}
+	d, _ = parseDV([]byte(`{"streams":[{"side_data_list":[{"side_data_type":"DOVI configuration record","dv_profile":8,"dv_bl_signal_compatibility_id":4}]}]}`))
+	if d.BaseTransfer() != "hlg" {
+		t.Errorf("%+v", d)
+	}
+}

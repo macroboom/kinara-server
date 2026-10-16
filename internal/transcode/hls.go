@@ -54,7 +54,9 @@ var (
 )
 
 // Start begins converting r to HLS and returns the session ID once the
-// first segment exists, so the player can start at once.
+// first segment exists, so the player can start at once. A conversion that
+// fails before its first segment is tried again at the next stage (see
+// pipeline.go).
 func (h *HLS) Start(ctx context.Context, r Request) (string, error) {
 	t := h.T
 	caps := t.Tool.Caps()
@@ -64,23 +66,55 @@ func (h *HLS) Start(ctx context.Context, r Request) (string, error) {
 	if r.Video == "h264" && caps.H264Encoder == "" {
 		return "", errors.New("this ffmpeg has no H.264 encoder")
 	}
-	id, err := newSessionID()
-	if err != nil {
+	r.Container, r.OutDir = "hls", h.Dir
+	if err := r.Validate(); err != nil {
 		return "", err
+	}
+	if err := t.prepare(ctx, &r, caps); err != nil {
+		return "", err
+	}
+	stages := t.stagesFor(r, caps)
+	var err error
+	for i, stage := range stages {
+		r.Stage = stage
+		var id string
+		var exited bool
+		id, exited, err = h.startOnce(ctx, r, caps)
+		if err == nil {
+			if stage != "" {
+				t.rememberStage(r, stage, i > 0)
+			}
+			return id, nil
+		}
+		// Only a conversion that ended by itself moves on: a busy server,
+		// a cancelled request or one that is merely slow isn't fixed by
+		// another way of converting.
+		if !exited || ctx.Err() != nil || i == len(stages)-1 {
+			break
+		}
+		t.Log.Warn("hls failed before its first segment; trying the next way", "file", filepath.Base(r.Path),
+			"stage", stage, "next", stages[i+1], "err", err)
+	}
+	return "", err
+}
+
+// startOnce runs one conversion attempt. exited reports that ffmpeg ended
+// before making a segment (rather than timing out or being cancelled).
+func (h *HLS) startOnce(ctx context.Context, r Request, caps ffmpeg.Caps) (id string, exited bool, err error) {
+	t := h.T
+	id, err = newSessionID()
+	if err != nil {
+		return "", false, err
 	}
 	dir := filepath.Join(h.Dir, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return "", false, err
 	}
-	r.Container, r.OutDir = "hls", dir
-	if err := r.Validate(); err != nil {
-		os.RemoveAll(dir)
-		return "", err
-	}
+	r.OutDir = dir
 	release, err := t.acquire(ctx, r.Owner.Priority)
 	if err != nil {
 		os.RemoveAll(dir)
-		return "", err
+		return "", false, err
 	}
 	live := t.register(r, "hls")
 
@@ -95,10 +129,15 @@ func (h *HLS) Start(ctx context.Context, r Request) (string, error) {
 		release()
 		t.unregister(live)
 		os.RemoveAll(dir)
-		return "", err
+		return "", false, err
 	}
 	s := &hlsSession{id: id, dir: dir, cancel: cancel, done: make(chan struct{}), last: time.Now(), live: live}
-	t.Log.Info("hls start", "file", r.Path, "from", r.Start, "video", r.Video, "audio", r.AudioCodec, "session", id)
+	enc := ""
+	if r.Video == "h264" {
+		enc = planVideo(r, caps).encoder
+	}
+	t.Log.Info("hls start", "file", r.Path, "from", r.Start, "video", r.Video, "stage", r.Stage, "encoder", enc,
+		"audio", r.AudioCodec, "dolby_vision", dvSummary(r), "session", id)
 	go func() {
 		err := cmd.Wait()
 		if sctx.Err() == nil && err != nil {
@@ -127,25 +166,30 @@ func (h *HLS) Start(ctx context.Context, r Request) (string, error) {
 	defer tick.Stop()
 	for {
 		if b, err := os.ReadFile(filepath.Join(dir, "index.m3u8")); err == nil && bytes.Contains(b, []byte("#EXTINF")) {
-			return id, nil
+			return id, false, nil
 		}
+		// Starting counts as use: the idle reaper must not end a session
+		// that is still making its first segment.
+		h.mu.Lock()
+		s.last = time.Now()
+		h.mu.Unlock()
 		select {
 		case <-s.done:
 			// It ended before a segment was listed: failed, or a very short file.
 			if b, err := os.ReadFile(filepath.Join(dir, "index.m3u8")); err == nil && bytes.Contains(b, []byte("#EXTINF")) {
-				return id, nil
+				return id, false, nil
 			}
 			h.Stop(id)
 			if s.err != nil {
-				return "", s.err
+				return "", true, s.err
 			}
-			return "", errors.New("ffmpeg made no video")
+			return "", true, errors.New("ffmpeg made no video")
 		case <-deadline:
 			h.Stop(id)
-			return "", errors.New("the conversion didn't start in time")
+			return "", false, errors.New("the conversion didn't start in time")
 		case <-ctx.Done():
 			h.Stop(id)
-			return "", ctx.Err()
+			return "", false, ctx.Err()
 		case <-tick.C:
 		}
 	}

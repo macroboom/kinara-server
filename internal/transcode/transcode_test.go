@@ -56,7 +56,7 @@ func TestArgsEncodeHDR(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := Args(r, ffmpeg.Caps{Found: true, H264Encoder: "h264_nvenc", ToneMap: true})
-	if !has(a, "-c:v", "h264_nvenc") || !has(a, "-b:v", "4000k") || !has(a, "-map", "0:a:0?") {
+	if !has(a, "-c:v", "h264_nvenc") || !has(a, "-b:v", "3600k", "-maxrate", "4000k") || !has(a, "-map", "0:a:0?") {
 		t.Errorf("args %v", a)
 	}
 	vf := a[indexOf(a, "-vf")+1]
@@ -251,7 +251,7 @@ func TestArgsMP4AndFilters(t *testing.T) {
 	}
 	a := Args(r, ffmpeg.Caps{Found: true})
 	joined := strings.Join(a, " ")
-	if !strings.Contains(joined, "-movflags frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1") {
+	if !strings.Contains(joined, "-movflags frag_keyframe+delay_moov+default_base_moof -f mp4 pipe:1") {
 		t.Errorf("mp4 output: %s", joined)
 	}
 	if strings.Contains(joined, "0:2") {

@@ -25,6 +25,9 @@
 // Limits:
 //
 //	KINORA_MAX_TRANSCODES  conversions at once (default 6 with a graphics card encoder, else 3)
+//	KINORA_HWACCEL         graphics card for converting: auto (default), nvenc, qsv,
+//	                       vaapi, amf, videotoolbox, or none for the CPU only
+//	KINORA_HW_DEVICE       Linux render node to use (default: each in turn)
 //
 // Remote access (turned on in the web manager, under Remote access):
 //
@@ -173,7 +176,10 @@ func open(c config) (*deps, error) {
 	}
 	d := &deps{store: st, log: log, logs: logs}
 	d.prober = &probe.Prober{Binary: c.ffprobe}
-	d.ffmpeg = &ffmpeg.Tool{Binary: ffmpegPath(c), Log: log}
+	// KINORA_HWACCEL picks the graphics card backend (auto, nvenc, qsv,
+	// vaapi, amf, videotoolbox, none); KINORA_HW_DEVICE the Linux render
+	// node (/dev/dri/renderD128).
+	d.ffmpeg = &ffmpeg.Tool{Binary: ffmpegPath(c), HWAccel: env("KINORA_HWACCEL", "auto"), Device: env("KINORA_HW_DEVICE", ""), Log: log}
 	if c.tmdbKey != "" {
 		d.tmdb = tmdb.New(c.tmdbKey)
 		d.matcher = &match.Matcher{Store: st, Src: d.tmdb, Log: log}
@@ -269,7 +275,7 @@ func serve(args []string) error {
 		// Check hardware encoders now rather than on the first stream.
 		go d.ffmpeg.Caps()
 		if feature("KINORA_TRANSCODE") {
-			srv.Transcoder = &transcode.Transcoder{Tool: d.ffmpeg, Log: d.log}
+			srv.Transcoder = &transcode.Transcoder{Tool: d.ffmpeg, FFprobe: c.ffprobe, Log: d.log}
 			// KINORA_MAX_TRANSCODES caps conversions at once (default 6 with
 			// a graphics card encoder, else 3).
 			if n, err := strconv.Atoi(env("KINORA_MAX_TRANSCODES", "0")); err == nil && n > 0 {

@@ -845,6 +845,7 @@ paths:
         - { name: maxHeight, in: query, schema: { type: integer }, description: "Pixels for re-encoded video (default 1080)" }
         - { name: audio, in: query, schema: { type: integer }, description: Source stream index of the audio track (default the first) }
         - { name: container, in: query, schema: { type: string, enum: [mkv, mp4] }, description: "mkv (default) or mp4: fragmented MP4 for web browsers, without subtitles" }
+        - { name: dovi, in: query, schema: { type: string, enum: ["1", "0"] }, description: "Whether the player shows Dolby Vision. 1: copied Dolby Vision goes out as is (tagged dvh1 in MP4/HLS). 0: profile 7 and 8.1 are copied as their HDR10 base layer, profile 5 is converted with libplacebo. Left out: profile 7 into MP4/HLS is stripped to HDR10, otherwise as before." }
         - { name: audioCodec, in: query, required: true, schema: { type: string, enum: [copy, aac] } }
         - { name: token, in: query, schema: { type: string } }
       responses:
