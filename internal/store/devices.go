@@ -28,12 +28,30 @@ type Device struct {
 	// NodeID is the iroh key it last used through the tunnel ("" if it
 	// never has).
 	NodeID string `json:"nodeId,omitempty"`
+
+	// The app install it signed in from (see Client). Sessions from apps
+	// that sent nothing get a client ID made from the session.
+	ClientID string `json:"clientId"`
+	Platform string `json:"platform"`
+	Brand    string `json:"brand"`
+	Model    string `json:"model"`
+	OS       string `json:"os"`
+	App      string `json:"app"`
+	Icon     string `json:"icon"`
+	Trusted  bool   `json:"trusted"`
+	// Label describes the device ("Roku · TCL 55S455"); Name is its own name.
+	Label string `json:"label"`
 }
 
 // Devices lists signed-in devices, most recently seen first.
 func (s *Store) Devices(ctx context.Context) ([]Device, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT s.token_hash, s.device_name, s.user_id, u.username, s.created_at, s.last_seen_at, s.node_id
-		FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.expires_at >= ? ORDER BY s.last_seen_at DESC`, now())
+	rows, err := s.db.QueryContext(ctx, `SELECT s.token_hash, s.device_name, s.user_id, u.username, s.created_at, s.last_seen_at, s.node_id,
+		COALESCE(c.id, d.id, ''), COALESCE(c.name, d.name, ''), COALESCE(c.platform, ''), COALESCE(c.brand, ''),
+		COALESCE(c.model, ''), COALESCE(c.os, ''), COALESCE(c.app, ''), COALESCE(c.form_factor, ''), COALESCE(c.trusted, d.trusted, 0)
+		FROM sessions s JOIN users u ON u.id = s.user_id
+		LEFT JOIN clients c ON c.id = s.client_id AND s.client_id != ''
+		LEFT JOIN clients d ON d.id = 's-' || substr(s.token_hash, 1, ?) AND s.client_id = ''
+		WHERE s.expires_at >= ? ORDER BY s.last_seen_at DESC`, DeviceIDLen, now())
 	if err != nil {
 		return nil, err
 	}
@@ -41,11 +59,29 @@ func (s *Store) Devices(ctx context.Context) ([]Device, error) {
 	out := []Device{}
 	for rows.Next() {
 		var d Device
-		var hash string
-		if err := rows.Scan(&hash, &d.Name, &d.UserID, &d.Username, &d.CreatedAt, &d.LastSeenAt, &d.NodeID); err != nil {
+		var hash, rowID, clientName string
+		var c Client
+		var trusted int
+		if err := rows.Scan(&hash, &d.Name, &d.UserID, &d.Username, &d.CreatedAt, &d.LastSeenAt, &d.NodeID,
+			&rowID, &clientName, &c.Platform, &c.Brand, &c.Model, &c.OS, &c.App, &c.FormFactor, &trusted); err != nil {
 			return nil, err
 		}
 		d.ID = DeviceID(hash)
+		if clientName != "" {
+			d.Name = clientName
+		}
+		if c.Platform == "" {
+			// No app details: describe it from its name (old web sign-ins
+			// used the browser's user agent).
+			c = sessionOnlyClient(rowID, d.Name)
+			d.Name = c.Name
+		}
+		c.ID, c.Name = rowID, d.Name
+		if c.ID == "" {
+			c.ID = DerivedClientID(hash)
+		}
+		d.ClientID, d.Platform, d.Brand, d.Model, d.OS, d.App = c.ID, c.Platform, c.Brand, c.Model, c.OS, c.App
+		d.Icon, d.Label, d.Trusted = ClientIcon(c), ClientLabel(c), trusted != 0
 		out = append(out, d)
 	}
 	return out, rows.Err()

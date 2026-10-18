@@ -30,6 +30,12 @@ const (
 // ffmpeg is run without a shell, with path passed as a single argument after
 // -i. Output beyond what limit implies (plus a little slack) is discarded.
 func Decode(ctx context.Context, ffmpegBin, path string, limit time.Duration) ([]int16, error) {
+	return DecodeFrom(ctx, ffmpegBin, path, 0, limit)
+}
+
+// DecodeFrom is Decode starting at from into the file (the end of an
+// episode, for credits). Sample 0 is the audio at from: the seek is exact.
+func DecodeFrom(ctx context.Context, ffmpegBin, path string, from, limit time.Duration) ([]int16, error) {
 	if ffmpegBin == "" {
 		ffmpegBin = "ffmpeg"
 	}
@@ -39,8 +45,12 @@ func Decode(ctx context.Context, ffmpegBin, path string, limit time.Duration) ([
 	limit = min(limit, maxDecodeLimit)
 
 	secs := strconv.FormatFloat(limit.Seconds(), 'f', 3, 64)
-	args := []string{
-		"-nostdin", "-hide_banner", "-loglevel", "error",
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
+	if from > 0 {
+		// Before -i: a fast seek, made exact by dropping the audio before it.
+		args = append(args, "-ss", strconv.FormatFloat(from.Seconds(), 'f', 3, 64))
+	}
+	args = append(args,
 		"-t", secs,
 		"-i", path,
 		"-map", "0:a:0",
@@ -50,7 +60,7 @@ func Decode(ctx context.Context, ffmpegBin, path string, limit time.Duration) ([
 		"-f", "s16le",
 		"-acodec", "pcm_s16le",
 		"pipe:1",
-	}
+	)
 	cmd := exec.CommandContext(ctx, ffmpegBin, args...)
 
 	// One extra second of slack covers resampler and container rounding.

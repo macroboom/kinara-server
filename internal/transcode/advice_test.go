@@ -146,7 +146,7 @@ func TestGPUPipelineArgs(t *testing.T) {
 	sdr := Request{Path: "/m.mkv", Video: "h264", AudioCodec: "copy", Audio: -1, SourceCodec: "hevc", MaxBitrate: 8000, MaxHeight: 1080}
 	_ = sdr.Validate()
 	a := Args(sdr, caps)
-	if !has(a, "-hwaccel cuda -hwaccel_output_format cuda", "scale_cuda=w=-2:h='min(ih,1080)':format=yuv420p", "-c:v h264_nvenc") {
+	if !has(a, "-hwaccel cuda -hwaccel_output_format cuda", "scale_cuda="+fit(1080)+":format=yuv420p", "-c:v h264_nvenc") {
 		t.Fatalf("sdr: %v", a)
 	}
 	hdr := sdr

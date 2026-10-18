@@ -231,7 +231,22 @@ func Args(r Request, caps ffmpeg.Caps) []string {
 	if r.Start > 0 {
 		a = append(a, "-ss", strconv.FormatFloat(r.Start, 'f', 3, 64))
 	}
-	a = append(a, "-i", r.Path, "-map", "0:v:0")
+	a = append(a, "-i", r.Path)
+	// HDR converted to SDR goes through -filter_complex rather than -vf: a
+	// stream made by a filter graph doesn't inherit the source stream's side
+	// data, so the H.264 out isn't labelled with the source's Dolby Vision
+	// configuration or HDR mastering data. Players that see a Dolby Vision
+	// label on plain H.264 (Roku) fetch it and never start.
+	fresh := encode && r.HDR != ""
+	if fresh {
+		vf := plan.vf
+		if vf == "" {
+			vf = "null"
+		}
+		a = append(a, "-filter_complex", "[0:v:0]"+vf+"[v]", "-map", "[v]")
+	} else {
+		a = append(a, "-map", "0:v:0")
+	}
 	if r.Audio >= 0 {
 		a = append(a, "-map", "0:"+strconv.Itoa(r.Audio))
 	} else {
@@ -254,7 +269,9 @@ func Args(r Request, caps ffmpeg.Caps) []string {
 	a = append(a, "-map_chapters", "-1")
 
 	if encode {
-		a = append(a, "-vf", plan.vf)
+		if !fresh {
+			a = append(a, "-vf", plan.vf)
+		}
 		a = append(a, videoEncoderArgs(plan.encoder, r.MaxBitrate, caps)...)
 		if r.Container == "hls" {
 			// A keyframe at every segment boundary, so each segment starts
@@ -373,9 +390,11 @@ func cpuFilter(r Request, caps ffmpeg.Caps, height int) string {
 		clean = "," + caps.SideData
 	}
 	if r.HDR != "" && caps.Placebo {
-		return fmt.Sprintf("libplacebo=w=-2:h='min(ih,%d)':", height) + strings.TrimPrefix(ffmpeg.PlaceboFilter, "libplacebo=") + clean
+		w, h := ffmpeg.Fit(height)
+		return fmt.Sprintf("libplacebo=w=%s:h=%s:", w, h) + strings.TrimPrefix(ffmpeg.PlaceboFilter, "libplacebo=") + clean
 	}
-	filters := []string{fmt.Sprintf("scale=-2:'min(ih,%d)'", height)}
+	fw, fh := ffmpeg.Fit(height)
+	filters := []string{fmt.Sprintf("scale=w=%s:h=%s", fw, fh)}
 	if transfer := sourceTransfer(r); transfer != "" && caps.ToneMap {
 		if caps.SetParams {
 			filters = append(filters, ffmpeg.SourceParams(transfer))

@@ -6,13 +6,16 @@
 //	kinora-server library add       add a library folder
 //	kinora-server library list      list libraries
 //	kinora-server scan              scan libraries now and wait
+//	kinora-server service           run under the Windows service manager (the installer sets this up)
 //
 // Settings come from flags or environment variables:
 //
-//	-data     KINORA_DATA      data folder (database, image cache)   ./kinora-data
+//	-data     KINORA_DATA      data folder (database, settings)      ./kinora-data
+//	-cache    KINORA_CACHE     cache folder (images, conversions,    DATA/cache
+//	                           preview thumbnails); can grow large
 //	-listen   KINORA_LISTEN    address to listen on                  :8420
 //	-tmdb-key KINORA_TMDB_KEY  TMDB API key or read access token
-//	-ffprobe  KINORA_FFPROBE   path to ffprobe                       ffprobe on PATH
+//	-ffprobe  KINORA_FFPROBE   path to ffprobe                       ffmpeg\ffprobe next to the server, else on PATH
 //	-ffmpeg   KINORA_FFMPEG    path to ffmpeg                        next to ffprobe, or on PATH
 //
 // Background features (on unless set to 0 or off):
@@ -43,11 +46,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,14 +82,44 @@ import (
 const version = "0.1.0-dev"
 
 type config struct {
-	dataDir string
-	listen  string
-	tmdbKey string
-	ffprobe string
-	ffmpeg  string
-	debug   bool
-	rescan  time.Duration
-	workers int
+	dataDir  string
+	cacheDir string
+	listen   string
+	tmdbKey  string
+	ffprobe  string
+	ffmpeg   string
+	debug    bool
+	rescan   time.Duration
+	workers  int
+}
+
+// cache is a folder inside the cache folder (KINORA_CACHE, else DATA/cache).
+func (c config) cache(name string) string {
+	root := c.cacheDir
+	if root == "" {
+		root = filepath.Join(c.dataDir, "cache")
+	}
+	return filepath.Join(root, name)
+}
+
+// bundledTool finds a tool shipped with the server: ffmpeg\ffprobe.exe (or
+// ffmpeg/ffprobe) in the server's own folder, as the Windows installer lays
+// it out, else beside the server. "" means look on PATH.
+func bundledTool(name string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	dir := filepath.Dir(exe)
+	for _, p := range []string{filepath.Join(dir, "ffmpeg", name), filepath.Join(dir, name)} {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
+	}
+	return ""
 }
 
 func env(key, def string) string {
@@ -96,8 +131,9 @@ func env(key, def string) string {
 
 func commonFlags(fs *flag.FlagSet, c *config) {
 	fs.StringVar(&c.dataDir, "data", env("KINORA_DATA", "./kinora-data"), "data folder")
+	fs.StringVar(&c.cacheDir, "cache", env("KINORA_CACHE", ""), "cache folder (default: the data folder's cache)")
 	fs.StringVar(&c.tmdbKey, "tmdb-key", env("KINORA_TMDB_KEY", ""), "TMDB API key or read access token")
-	fs.StringVar(&c.ffprobe, "ffprobe", env("KINORA_FFPROBE", ""), "path to ffprobe")
+	fs.StringVar(&c.ffprobe, "ffprobe", env("KINORA_FFPROBE", bundledTool("ffprobe")), "path to ffprobe")
 	fs.StringVar(&c.ffmpeg, "ffmpeg", env("KINORA_FFMPEG", ""), "path to ffmpeg (default: next to ffprobe, or on PATH)")
 	fs.BoolVar(&c.debug, "debug", false, "verbose logging")
 	workers, _ := strconv.Atoi(env("KINORA_SCAN_WORKERS", "0"))
@@ -119,6 +155,8 @@ func main() {
 	switch cmd {
 	case "serve":
 		err = serve(args)
+	case "service":
+		err = runService(args)
 	case "user":
 		err = userCmd(args)
 	case "library":
@@ -145,6 +183,7 @@ const usage = `Usage:
   kinora-server library add -kind movies|tv [-name NAME] PATH
   kinora-server library list
   kinora-server scan [-library ID]
+  kinora-server service [serve flags]   (Windows: started by the service manager)
   kinora-server version`
 
 type deps struct {
@@ -185,7 +224,7 @@ func open(c config) (*deps, error) {
 		d.matcher = &match.Matcher{Store: st, Src: d.tmdb, Log: log}
 	}
 	d.scanner = &scanner.Scanner{Store: st, Prober: d.prober, Matcher: d.matcher, Log: log, Workers: c.workers}
-	d.images = images.New(filepath.Join(c.dataDir, "cache", "images"))
+	d.images = images.New(c.cache("images"))
 	return d, nil
 }
 
@@ -221,6 +260,25 @@ func feature(key string) bool {
 }
 
 func serve(args []string) error {
+	ctx := context.Background()
+	// KINORA_STOP_ON_EOF=1: a parent (the Windows tray, in "at sign-in"
+	// mode) holds our stdin open; when it closes it, or the parent dies, we
+	// shut down cleanly. Windows has no SIGTERM to send a windowless child.
+	if env("KINORA_STOP_ON_EOF", "") == "1" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			cancel()
+		}()
+	}
+	return serveUntil(ctx, args)
+}
+
+// serveUntil runs the server until parent ends (the Windows service manager
+// stopping it) or the process is interrupted.
+func serveUntil(parent context.Context, args []string) error {
 	var c config
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	commonFlags(fs, &c)
@@ -234,7 +292,7 @@ func serve(args []string) error {
 	}
 	defer d.store.Close()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var warnings []string
@@ -266,7 +324,8 @@ func serve(args []string) error {
 		Store: d.store, Scanner: d.scanner, Matcher: d.matcher, Images: d.images,
 		Watch: &watch.Service{Store: d.store}, Log: d.log, Version: version,
 		BaseCtx: ctx, Warnings: warnings, TMDB: d.tmdb, FFprobe: c.ffprobe, WebDir: webDir,
-		Logs: d.logs, DataDir: c.dataDir,
+		LANPort: lanPortOf(c.listen),
+		Logs:    d.logs, DataDir: c.dataDir, CacheDir: c.cache(""),
 	}
 	// Readings for the metrics page: every 5 s, the last day in memory.
 	srv.Metrics = &metrics.Collector{Streams: srv.StreamCounts}
@@ -284,16 +343,16 @@ func serve(args []string) error {
 			srv.Transcoder.Init()
 			// HLS for iPhones and Safari, written under the cache (left over
 			// sessions from a previous run are cleared first).
-			hlsDir := filepath.Join(c.dataDir, "cache", "hls")
+			hlsDir := c.cache("hls")
 			_ = os.RemoveAll(hlsDir)
 			srv.HLS = &transcode.HLS{T: srv.Transcoder, Dir: hlsDir}
 		}
-		srv.Subtitles = &transcode.Subtitles{Tool: d.ffmpeg, Dir: filepath.Join(c.dataDir, "cache", "subtitles")}
-		srv.PGS = &pgs.Extractor{Tool: d.ffmpeg, Dir: filepath.Join(c.dataDir, "cache", "pgs"), Log: d.log}
+		srv.Subtitles = &transcode.Subtitles{Tool: d.ffmpeg, Dir: c.cache("subtitles")}
+		srv.PGS = &pgs.Extractor{Tool: d.ffmpeg, FFprobe: c.ffprobe, Dir: c.cache("pgs"), Log: d.log}
 		worker := &jobs.Worker{Store: d.store, Tool: d.ffmpeg, Log: d.log, Intros: feature("KINORA_INTROS"),
-			ThumbDir: filepath.Join(c.dataDir, "cache", "thumbs")}
+			ThumbDir: c.cache("thumbs")}
 		if feature("KINORA_TRICKPLAY") {
-			worker.Trickplay = &trickplay.Maker{Tool: d.ffmpeg, Dir: filepath.Join(c.dataDir, "cache", "trickplay")}
+			worker.Trickplay = &trickplay.Maker{Tool: d.ffmpeg, Dir: c.cache("trickplay")}
 			srv.Trickplay = worker.Trickplay
 		}
 		// Always on: it also makes pictures for "Other videos" titles.
@@ -348,7 +407,7 @@ func serve(args []string) error {
 	if n, _ := d.store.CountUsers(ctx); n == 0 {
 		d.log.Info("first run: open the server in a browser to create the admin account", "url", "http://localhost"+portOf(c.listen))
 	}
-	d.log.Info("Kinora server running", "version", version, "listen", c.listen, "data", c.dataDir)
+	d.log.Info("Kinora server running", "version", version, "listen", c.listen, "data", c.dataDir, "cache", c.cache(""))
 
 	select {
 	case err := <-errc:
@@ -636,12 +695,15 @@ func startCloud(ctx context.Context, d *deps, srv *api.Server, handler http.Hand
 			return in.Ticket, in.NodeID
 		}
 		// The sidecar uses our own iroh relay once the server is linked.
-		sc.RelayURLs = func() []string {
+		sc.SetRelays(func() []string {
 			if st := m.State(); st != nil {
 				return st.IrohRelays
 			}
 			return nil
-		}
+		})
+		// Also called once the saved link is read at startup: the sidecar
+		// may have started before then, on the public relays.
+		m.RelaysChanged = sc.Reload
 	}
 	srv.Cloud = m
 	go m.Run(ctx)
@@ -687,4 +749,10 @@ func startRemote(ctx context.Context, d *deps, srv *api.Server, handler http.Han
 		sc.Configure(rs.Enabled, rs.UDPPort)
 	}
 	go sc.Run(ctx)
+}
+
+// lanPortOf is the port in a listen address (":8420" -> 8420).
+func lanPortOf(listen string) int {
+	n, _ := strconv.Atoi(strings.TrimPrefix(portOf(listen), ":"))
+	return n
 }

@@ -55,6 +55,8 @@ type loginRequest struct {
 	Username   string `json:"username"`
 	Password   string `json:"password"`
 	DeviceName string `json:"deviceName"`
+	// Device describes the app signing in (see clients.go).
+	Device *deviceInfo `json:"device"`
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +65,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	device := req.DeviceName
+	device := sessionDeviceName(req.DeviceName, req.Device)
 	if device == "" {
 		device = r.UserAgent()
 	}
@@ -76,6 +78,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, status, err.Error())
 		return
 	}
+	s.attachDevice(r, token, req.Device)
 	profiles, _ := s.Store.Profiles(r.Context(), u.ID)
 	if profiles == nil {
 		profiles = []store.Profile{}
@@ -118,6 +121,7 @@ func (s *Server) signIn(r *http.Request, username, password, device string) (str
 		return "", store.User{}, err
 	}
 	s.noteNode(r, hash)
+	s.noteSignIn(r, u, hash)
 	return token, u, nil
 }
 
@@ -467,6 +471,10 @@ func (s *Server) startScan(w http.ResponseWriter, r *http.Request, rematch bool)
 }
 
 func (s *Server) scanLibrary(w http.ResponseWriter, r *http.Request, u store.User) {
+	if r.URL.Query().Get("path") != "" {
+		s.scanFolder(w, r)
+		return
+	}
 	s.startScan(w, r, false)
 }
 
@@ -634,6 +642,9 @@ func (s *Server) setWatched(w http.ResponseWriter, r *http.Request, u store.User
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if req.Watched {
+		s.noteWatched(r, u, it, true)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -685,6 +696,7 @@ func (s *Server) applyFix(r *http.Request, id string, tmdbID int) (store.Item, e
 	if !ok {
 		return it, errors.New("no match for that ID")
 	}
+	s.libraryChanged()
 	if fresh, err := s.Store.GetItem(r.Context(), it.ID); err == nil {
 		return fresh, nil
 	}
@@ -782,20 +794,30 @@ func (s *Server) reportProgress(w http.ResponseWriter, r *http.Request, u store.
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	versionID := ""
 	for _, v := range versions {
 		if req.VersionID == "" || v.ID == req.VersionID {
-			duration = v.DurationSec
+			duration, versionID = v.DurationSec, v.ID
 			break
 		}
 	}
 	if duration == 0 && it.RuntimeMin > 0 {
 		duration = float64(it.RuntimeMin) * 60
 	}
-	st, err := s.Watch.Report(r.Context(), u.ProfileID, it.ID, req.PositionSec, duration, req.ClientTime)
+	position := req.PositionSec
+	// Reaching the end credits counts as watching it all, even when they
+	// start before the usual watched share (long credits, a short episode).
+	if versionID != "" && duration > 0 && position < duration {
+		if c, err := s.Store.EndCreditsFor(r.Context(), versionID); err == nil && c != nil && position >= c.Start {
+			position = duration
+		}
+	}
+	st, err := s.Watch.Report(r.Context(), u.ProfileID, it.ID, position, duration, req.ClientTime)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.noteFinished(r, u, it, position, duration)
 	// A live report (not one queued while offline) says what's playing now.
 	if req.ClientTime == 0 || time.Since(time.Unix(req.ClientTime, 0)) < playingFor {
 		title := it.Title
@@ -806,11 +828,11 @@ func (s *Server) reportProgress(w http.ResponseWriter, r *http.Request, u store.
 				}
 			}
 		}
-		versionID := req.VersionID
-		if versionID == "" && len(versions) > 0 {
-			versionID = versions[0].ID
+		playing := req.VersionID
+		if playing == "" && len(versions) > 0 {
+			playing = versions[0].ID
 		}
-		s.notePlay(r, u, it, versionID, title, req.PositionSec, duration)
+		s.notePlay(r, u, it, playing, title, req.PositionSec, duration)
 	}
 	writeJSON(w, http.StatusOK, st)
 }

@@ -123,7 +123,8 @@ func (h *HLS) startOnce(ctx context.Context, r Request, caps ffmpeg.Caps) (id st
 	cmd := exec.CommandContext(sctx, t.Tool.Path(), Args(r, caps)...)
 	ffmpeg.HideWindow(cmd)
 	tail := &ffmpeg.Tail{N: 2048}
-	cmd.Stderr = &statsSplitter{rest: tail, onStat: live.stat}
+	stats := &statsSplitter{rest: tail, onStat: live.stat}
+	cmd.Stderr = stats
 	if err := ffmpeg.StartLow(cmd); err != nil {
 		cancel()
 		release()
@@ -138,6 +139,7 @@ func (h *HLS) startOnce(ctx context.Context, r Request, caps ffmpeg.Caps) (id st
 	}
 	t.Log.Info("hls start", "file", r.Path, "from", r.Start, "video", r.Video, "stage", r.Stage, "encoder", enc,
 		"audio", r.AudioCodec, "dolby_vision", dvSummary(r), "session", id)
+	go h.watch(s, filepath.Base(r.Path), stats, time.Now())
 	go func() {
 		err := cmd.Wait()
 		if sctx.Err() == nil && err != nil {
@@ -185,6 +187,8 @@ func (h *HLS) startOnce(ctx context.Context, r Request, caps ffmpeg.Caps) (id st
 			}
 			return "", true, errors.New("ffmpeg made no video")
 		case <-deadline:
+			t.Log.Warn("hls made no segment in time; giving up", "file", filepath.Base(r.Path), "waited", wait,
+				"ffmpeg", stats.last(), "session", id)
 			h.Stop(id)
 			return "", false, errors.New("the conversion didn't start in time")
 		case <-ctx.Done():
@@ -294,4 +298,48 @@ func newSessionID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// How a conversion's progress is logged: how long the first segment took,
+// then its speed every 10 s for the first minute, and after that only when
+// it falls behind (at most every 30 s). Below 1.0x the player runs out of
+// video and keeps buffering.
+const (
+	progressEvery   = 10 * time.Second
+	progressFor     = time.Minute
+	behindLogsEvery = 30 * time.Second
+)
+
+func (h *HLS) watch(s *hlsSession, file string, stats *statsSplitter, start time.Time) {
+	tick := time.NewTicker(progressEvery)
+	defer tick.Stop()
+	var first time.Time
+	var lastBehind time.Time
+	playlist := filepath.Join(s.dir, "index.m3u8")
+	for {
+		select {
+		case <-s.done:
+			return
+		case now := <-tick.C:
+			if first.IsZero() {
+				if b, err := os.ReadFile(playlist); err == nil && bytes.Contains(b, []byte("#EXTINF")) {
+					first = now
+					h.T.Log.Info("hls first segment", "file", file, "after", now.Sub(start).Round(100*time.Millisecond), "session", s.id)
+				} else {
+					h.T.Log.Warn("hls has made nothing yet", "file", file, "waited", now.Sub(start).Round(time.Second),
+						"ffmpeg", stats.last(), "session", s.id)
+					continue
+				}
+			}
+			in := s.live.info(now)
+			rate := fmt.Sprintf("%.2fx", in.Rate)
+			switch {
+			case now.Sub(start) <= progressFor:
+				h.T.Log.Info("hls progress", "file", file, "rate", rate, "ffmpeg", stats.last(), "session", s.id)
+			case in.Behind && now.Sub(lastBehind) >= behindLogsEvery:
+				lastBehind = now
+				h.T.Log.Warn("hls conversion is slower than playback", "file", file, "rate", rate, "ffmpeg", stats.last(), "session", s.id)
+			}
+		}
+	}
 }

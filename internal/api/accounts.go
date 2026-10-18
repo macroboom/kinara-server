@@ -50,6 +50,8 @@ type signupRequest struct {
 	Password string `json:"password"`
 	// DeviceName names the session, as on /auth/login.
 	DeviceName string `json:"deviceName"`
+	// Device describes the app signing in (see clients.go).
+	Device *deviceInfo `json:"device"`
 }
 
 // signup makes an ordinary account when the owner allows it, and signs it in
@@ -90,11 +92,12 @@ func (s *Server) signup(w http.ResponseWriter, r *http.Request) {
 		accountErr(w, err)
 		return
 	}
-	token, u, err := s.signIn(r, name, req.Password, req.DeviceName)
+	token, u, err := s.signIn(r, name, req.Password, sessionDeviceName(req.DeviceName, req.Device))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.attachDevice(r, token, req.Device)
 	profiles, _ := s.Store.Profiles(r.Context(), u.ID)
 	if profiles == nil {
 		profiles = []store.Profile{}
@@ -112,7 +115,11 @@ func (s *Server) createAccount(r *http.Request, name, password string, admin boo
 	if err != nil {
 		return store.User{}, err
 	}
-	return s.Store.CreateUser(r.Context(), name, hash, admin)
+	nu, err := s.Store.CreateUser(r.Context(), name, hash, admin)
+	if err == nil {
+		s.noteUserCreated(nu)
+	}
+	return nu, err
 }
 
 func accountErr(w http.ResponseWriter, err error) {

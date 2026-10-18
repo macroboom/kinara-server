@@ -11,6 +11,12 @@ package intro
 // ties going to the earliest start. Agreement favours the theme song over a
 // recap or a cue that two episodes happen to share.
 func Detect(prints [][]uint32) map[int]Range {
+	return DetectIn(prints, IntroBounds)
+}
+
+// DetectIn is Detect with other length bounds (CreditsBounds for the ends
+// of episodes).
+func DetectIn(prints [][]uint32, bounds Bounds) map[int]Range {
 	type pairResult struct {
 		ra, rb Range
 		ok     bool
@@ -21,7 +27,7 @@ func Detect(prints [][]uint32) map[int]Range {
 		key := [2]int{lo, hi}
 		res, seen := cache[key]
 		if !seen {
-			res.ra, res.rb, res.ok = Compare(prints[lo], prints[hi])
+			res.ra, res.rb, res.ok = CompareIn(prints[lo], prints[hi], bounds)
 			cache[key] = res
 		}
 		if !res.ok {

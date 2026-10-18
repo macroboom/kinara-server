@@ -22,6 +22,96 @@ components:
       type: object
       properties:
         error: { type: string }
+    DeviceInfo:
+      type: object
+      description: >
+        Optional on sign-in (login, signup, cloud). Describes the app install so
+        the owner sees what the device is and can trust it. Keep `id` the same
+        for the life of the install: signing in again keeps the device's name
+        and trust. Unknown fields are ignored. `deviceName` is still accepted
+        and wins over `name`.
+      properties:
+        id: { type: string, description: "8 to 64 of A-Z a-z 0-9 - _, made by the app on install" }
+        name: { type: string, example: "Mridul's Z Fold 6" }
+        platform: { type: string, enum: [android, android-tv, ios, tvos, roku, web] }
+        brand: { type: string, example: samsung }
+        model: { type: string, example: SM-F956U1, description: 'The web app sends "Chrome on Windows" and the like' }
+        os: { type: string, example: Android 15 }
+        app: { type: string, example: Kinara 0.9.4 }
+        formFactor: { type: string, enum: [tablet], description: Send "tablet" on tablets }
+    DeviceItem:
+      type: object
+      properties:
+        id: { type: string, description: "The session's device ID (sign out with DELETE /devices/{id})" }
+        name: { type: string }
+        userId: { type: integer }
+        username: { type: string }
+        createdAt: { type: integer }
+        lastSeenAt: { type: integer }
+        current: { type: boolean }
+        nodeId: { type: string }
+        clientId: { type: string, description: 'The app install; "s-" plus the session ID for apps that sent none' }
+        platform: { type: string }
+        brand: { type: string }
+        model: { type: string }
+        os: { type: string }
+        app: { type: string }
+        icon:
+          type: string
+          enum: [roku, shield, google-tv, fire-tv, android-tv, apple-tv, tv, iphone, ipad, android-phone,
+            android-tablet, web-chrome, web-firefox, web-safari, web-edge, web]
+        trusted: { type: boolean, description: Requests from this device are approved straight away }
+        label: { type: string, example: "Roku · TCL 55S455" }
+    Request:
+      type: object
+      properties:
+        id: { type: integer }
+        kind: { type: string, enum: [movie, show] }
+        tmdbId: { type: integer }
+        title: { type: string }
+        year: { type: integer }
+        posterUrl: { type: string }
+        mode: { type: string, enum: [all, seasons, pilot] }
+        seasons: { type: array, items: { type: integer } }
+        status: { type: string, enum: [pending, approved, declined, available] }
+        auto: { type: boolean, description: Approved straight away (trusted device) }
+        note: { type: string }
+        declineReason: { type: string }
+        requestedBy: { type: object, properties: { id: { type: integer }, name: { type: string } } }
+        device: { type: object, properties: { id: { type: string }, name: { type: string }, icon: { type: string } } }
+        createdAt: { type: integer }
+        decidedAt: { type: integer }
+    RequestMarker:
+      type: object
+      description: On titles outside the library when there is a pending or approved request for them
+      properties:
+        id: { type: integer }
+        status: { type: string, enum: [pending, approved] }
+        mine: { type: boolean }
+        mode: { type: string }
+        seasons: { type: array, items: { type: integer } }
+    TitleItem:
+      type: object
+      description: A TMDB title (trending, discover, search)
+      properties:
+        tmdbId: { type: integer }
+        kind: { type: string, enum: [movie, show] }
+        title: { type: string }
+        year: { type: integer }
+        overview: { type: string }
+        rating: { type: number }
+        genres: { type: array, items: { type: string } }
+        posterUrl: { type: string }
+        backdropUrl: { type: string }
+        item: { type: object, description: The library's copy, when there is one }
+        request: { $ref: "#/components/schemas/RequestMarker" }
+        rank: { type: integer, description: Place in a trending list }
+    TitlePage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/TitleItem" } }
+        page: { type: integer }
+        totalPages: { type: integer }
     User:
       type: object
       properties:
@@ -98,6 +188,13 @@ components:
           type: object
           description: Where the opening titles are, when found
           properties: { start: { type: number }, end: { type: number } }
+        endCredits:
+          type: object
+          description: Where the end credits are, when found (players offer the next episode from start)
+          properties:
+            start: { type: number }
+            end: { type: number }
+            source: { type: string, enum: [audio, picture], description: How they were found }
     Library:
       type: object
       properties:
@@ -206,6 +303,7 @@ paths:
                 username: { type: string }
                 password: { type: string }
                 deviceName: { type: string, example: Living room Shield }
+                device: { $ref: "#/components/schemas/DeviceInfo" }
       responses:
         "200":
           description: Signed in
@@ -436,7 +534,11 @@ paths:
     get:
       summary: Signed-in devices (admin)
       responses:
-        "200": { description: Devices, most recently seen first }
+        "200":
+          description: Devices, most recently seen first
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/DeviceItem" } }
 
   /devices/{id}:
     delete:
@@ -446,6 +548,202 @@ paths:
       responses:
         "204": { description: Signed out }
         "404": { description: No such device }
+
+  /clients/{clientId}:
+    put:
+      summary: Trust or rename a device (admin)
+      parameters:
+        - { name: clientId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                trusted: { type: boolean }
+                name: { type: string, description: 1 to 80 characters }
+      responses:
+        "200":
+          description: The device as GET /devices lists it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeviceItem" }
+        "404": { description: No such device }
+
+  /me/device:
+    put:
+      summary: >-
+        The app describes itself (the same object as `device` on sign-in), so
+        sessions from before it sent one get its name and details. Apps send it
+        when they start. A name the owner gave the device is kept.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string, description: "8 to 64 of A-Z, a-z, 0-9, - and _" }
+                name: { type: string }
+                platform: { type: string }
+                brand: { type: string }
+                model: { type: string }
+                os: { type: string }
+                app: { type: string }
+                formFactor: { type: string }
+      responses:
+        "204": { description: Recorded }
+        "400": { description: Missing or unusable id }
+
+  /requests:
+    get:
+      summary: Requests, newest first. Owners see everyone's; others their own.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, approved, declined, available] } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: The requests, and how many are pending
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Request" } }
+                  pending: { type: integer }
+    post:
+      summary: Ask for a movie or show that isn't on the server
+      description: >
+        From a trusted device it is approved straight away (`auto`, `sent`).
+        An identical open request is returned with 200 and `duplicate: true`.
+        Emits request.created, and request.approved when trusted.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, tmdbId]
+              properties:
+                kind: { type: string, enum: [movie, show] }
+                tmdbId: { type: integer }
+                mode: { type: string, enum: [all, seasons, pilot], description: Shows only }
+                seasons: { type: array, items: { type: integer }, description: With mode seasons }
+                note: { type: string, maxLength: 280 }
+      responses:
+        "201":
+          description: Made. The request, plus `sent`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Request"
+                  - type: object
+                    properties:
+                      sent: { type: boolean }
+                      duplicate: { type: boolean }
+        "200": { description: An identical open request already exists (duplicate true) }
+        "409": { description: Already on the server }
+
+  /requests/{id}/approve:
+    post:
+      summary: Approve a pending request (admin). Emits request.approved.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The request }
+        "409": { description: Not pending }
+
+  /requests/{id}/decline:
+    post:
+      summary: Decline a pending or approved request (admin). Emits request.declined.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { reason: { type: string, maxLength: 280 } } }
+      responses:
+        "200": { description: The request }
+
+  /requests/{id}:
+    delete:
+      summary: Cancel your own pending request; owners may remove any
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Removed }
+        "409": { description: Not pending any more }
+
+  /discover:
+    get:
+      summary: The Discover page, kept for an hour
+      description: >
+        Sections in order (empty ones left out): trending, new-movies,
+        new-episodes, popular-movies, popular-shows, coming-soon, classics,
+        acclaimed-shows. Genres are TMDB's for movies and shows.
+      responses:
+        "200":
+          description: Sections and genres
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sections:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        title: { type: string }
+                        items: { type: array, items: { $ref: "#/components/schemas/TitleItem" } }
+                  genres:
+                    type: array
+                    items: { type: object, properties: { id: { type: integer }, name: { type: string }, kind: { type: string, enum: [movie, show] } } }
+                  updatedAt: { type: integer }
+
+  /discover/{section}:
+    get:
+      summary: One Discover section, paged (20 a page)
+      parameters:
+        - { name: section, in: path, required: true, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+      responses:
+        "200":
+          description: A page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TitlePage" }
+        "404": { description: No such section }
+
+  /discover/genre/{kind}/{genreId}:
+    get:
+      summary: Titles in one genre, paged
+      parameters:
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [movie, show] } }
+        - { name: genreId, in: path, required: true, schema: { type: integer } }
+        - { name: sort, in: query, schema: { type: string, enum: [popular, rating, new], default: popular } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+      responses:
+        "200":
+          description: A page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TitlePage" }
+
+  /search/external:
+    get:
+      summary: Search TMDB for movies and shows, in the library or not
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+      responses:
+        "200":
+          description: A page; titles the library has carry `item`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TitlePage" }
 
   /fs/folders:
     get:
@@ -483,11 +781,16 @@ paths:
 
   /libraries/{id}/scan:
     post:
-      summary: Start a scan (admin)
+      summary: Start a scan (admin, or an API key with library:scan)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
+        - name: path
+          in: query
+          description: Scan only this folder, relative to one of the library's folders (or a full path inside one).
+          schema: { type: string }
       responses:
         "202": { description: Started }
+        "400": { description: The folder isn't inside the library or doesn't exist }
         "409": { description: A scan is already running }
 
   /libraries/{id}/rematch:
@@ -927,6 +1230,36 @@ paths:
         "501": { description: No TMDB key on the server }
         "502": { description: TMDB couldn't be reached }
 
+  /tmdb/{kind}/{id}:
+    get:
+      summary: A movie or show from TMDB, whether or not it's in the library
+      description: |
+        Details, top cast and (for shows) seasons, for a title page opened from
+        Trending. `item` is set when the library has it; apps then open the
+        library page instead. Cached on the server for 6 hours. Needs a TMDB key.
+        `request` (a RequestMarker) is set when someone has an open request for
+        it, and `onTheWay` when the owner's tools reported it is on its way.
+      parameters:
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [movie, show] } }
+        - { name: id, in: path, required: true, schema: { type: integer }, description: The TMDB ID }
+      responses:
+        "200": { description: OK }
+        "400": { description: Not movie or show, or a bad ID }
+        "404": { description: TMDB has no such title }
+        "501": { description: No TMDB key on the server }
+        "502": { description: TMDB couldn't be reached }
+
+  /tmdb/show/{id}/season/{n}:
+    get:
+      summary: A season's episodes from TMDB (titles, dates, stills), for shows outside the library
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer }, description: The show's TMDB ID }
+        - { name: n, in: path, required: true, schema: { type: integer }, description: Season number (0 for specials) }
+      responses:
+        "200": { description: OK }
+        "404": { description: TMDB has no such season }
+        "501": { description: No TMDB key on the server }
+
   /tmdb-image/{file}:
     get:
       summary: TMDB artwork for titles not in the library (Trending), resized on request
@@ -971,6 +1304,7 @@ paths:
                 username: { type: string, description: "1 to 32 letters, digits, spaces, dots, dashes or underscores" }
                 password: { type: string, description: At least 8 characters }
                 deviceName: { type: string }
+                device: { $ref: "#/components/schemas/DeviceInfo" }
       responses:
         "201": { description: Signed in; same shape as /auth/login }
         "400": { description: Bad name or short password }
@@ -1134,3 +1468,317 @@ paths:
       description: Version, warnings, whether metadata, converting and HLS are on, what ffmpeg can do, and what the background worker is doing.
       responses:
         "200": { description: OK }
+    post:
+      summary: Report on a title on its way (an API key with status:write, or an owner)
+      description: >
+        The Kinora format, the same as an incoming hook: tmdbId (with kind),
+        tvdbId, imdbId, or title and year; season, episode; state (queued,
+        in_progress, done, failed) or progress (0 to 1 or 0 to 100); message;
+        eta (seconds); id (your own reference). "done" clears the status and
+        scans the title's library.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "202": { description: 'Matched: {"matched": {"kind", "title", "year", "tmdbId"}, "state", "id"}' }
+        "200": { description: 'No title matched yet; the status is kept: {"matched": null, "kept": true}' }
+        "400": { description: Unreadable, or nothing identifies the title }
+        "429": { description: 'More than 2 a second for one title or 60 a minute for one sender; see Retry-After' }
+
+  # --- Integrations ---
+  # API keys: "Authorization: Bearer kn_live_..." works only on the endpoints
+  # that say so, within the key's scopes (library:read, library:scan,
+  # status:write, activity:read, webhooks:manage). "local" keys only work
+  # from the home network, never through remote access.
+
+  /integrations/events:
+    get:
+      summary: Every webhook event and API key scope (owners)
+      responses:
+        "200": { description: '{"items": [{"id", "group", "label", "description", "soon"?}], "scopes": [{"id", "label", "description"}]}' }
+
+  /integrations/webhooks:
+    get:
+      summary: Outgoing webhooks (owners, or webhooks:manage)
+      responses:
+        "200": { description: '{"items": [Webhook]}. Webhook: {id, name, url, enabled, secret, events[], libraries: "all"|number[], accounts: "all"|number[], headers: [{name, value}], retries (0..8), timeoutSec (5..30), includePaths, health: {state: ok|failing|never|paused, lastAt?, lastStatus, lastError?}, createdAt}' }
+    post:
+      summary: Add a webhook (a secret is made when none is sent)
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "201": { description: The webhook }
+        "400": { description: What's wrong with it }
+
+  /integrations/webhooks/{id}:
+    put:
+      summary: Change a webhook (fields left out keep their value)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The webhook }
+    delete:
+      summary: Remove a webhook with its queue and log
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Removed }
+
+  /integrations/webhooks/{id}/test:
+    post:
+      summary: Send a "test" event now; answers with the delivery
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: 'Delivery: {id, deliveryId, at, event, status (number|null), ms, attempt, error?, request, response? (first 4 KB)}' }
+
+  /integrations/webhooks/{id}/secret:
+    post:
+      summary: Make a new secret; the old one stops working
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: '{"secret": "whsec_..."}' }
+
+  /integrations/webhooks/{id}/deliveries:
+    get:
+      summary: Recent tries, newest first (kept 7 days)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200": { description: '{"items": [Delivery]}' }
+
+  /integrations/webhooks/{id}/deliveries/{delivery}/redeliver:
+    post:
+      summary: Send a logged delivery again now, with a new delivery ID; answers with the result
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: delivery, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The new Delivery }
+
+  /integrations/incoming:
+    get:
+      summary: Incoming hooks (owners, or webhooks:manage)
+      responses:
+        "200": { description: '{"items": [Hook]}. Hook: {id, name, token, path, enabled, format: kinora|custom, mapping: {field: path}, stateMap: [{from, to}], progressScale: auto|fraction|percent, onDone: scan|nothing, expireHours, visibility: owners|everyone, lastReceivedAt, createdAt}' }
+    post:
+      summary: Add an incoming hook (a token is made)
+      responses:
+        "201": { description: The hook }
+
+  /integrations/incoming/{id}:
+    put:
+      summary: Change an incoming hook (fields left out keep their value)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The hook }
+    delete:
+      summary: Remove a hook, its log and the statuses it reported
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Removed }
+
+  /integrations/incoming/{id}/token:
+    post:
+      summary: Give a hook a new address; the old one stops working
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The hook }
+
+  /integrations/incoming/{id}/received:
+    get:
+      summary: What the hook was sent, newest first (last 200 kept)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200": { description: '{"items": [{id, at, ok, summary, body}]}' }
+
+  /hooks/in/{token}:
+    post:
+      summary: Receive an update at an incoming hook's address (no sign-in; the address is the secret)
+      security: []
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        "202": { description: Matched a title }
+        "200": { description: No title matched yet; kept }
+        "400": { description: Unreadable, or nothing identifies the title }
+        "403": { description: The hook is turned off }
+        "404": { description: No such hook }
+        "429": { description: Too many updates; see Retry-After }
+
+  /ontheway:
+    get:
+      summary: Titles on their way that the asker may see (owners see all)
+      responses:
+        "200": { description: '{"items": [{id, kind, tmdbId, title, year?, season?, episode?, state, progress?, message?, etaSec?, updatedAt, source, item?: {id}}]}' }
+
+  /ontheway/{id}:
+    delete:
+      summary: Clear a status (owners, or webhooks:manage)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Cleared }
+
+  /integrations/keys:
+    get:
+      summary: API keys (owners)
+      responses:
+        "200": { description: '{"items": [{id, name, prefix, scopes, network: local|any, createdAt, lastUsedAt?, expiresAt?}]}' }
+    post:
+      summary: 'Make a key: {name, scopes[], network, expiresDays: 0|30|90|365}. The answer has the whole key ("key") once.'
+      responses:
+        "201": { description: The key, with "key" }
+
+  /integrations/keys/{id}:
+    delete:
+      summary: Revoke a key
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Revoked }
+  /time:
+    get:
+      summary: >-
+        The server clock in Unix milliseconds, for apps lining their clocks up
+        for watch parties. No sign-in needed.
+      security: []
+      responses:
+        "200":
+          description: Server time
+          content:
+            application/json:
+              schema: { type: object, properties: { t: { type: number } } }
+  /me/device/name:
+    put:
+      summary: Name this device ("Living Room TV"), shown in watch party invites.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 40 } } }
+      responses:
+        "200": { description: The device and its new name }
+  /parties/mine:
+    get:
+      summary: This device, its watch party (or null) and the parties inviting it.
+      responses:
+        "200": { description: "{me, party, invites}" }
+  /parties/devices:
+    get:
+      summary: Devices online now that can be invited to a watch party.
+      responses:
+        "200": { description: "[{device, name, user, label, icon}]" }
+  /parties:
+    post:
+      summary: >-
+        Start a watch party around what this device is playing. Playback
+        carries on as it was; `invite` lists device IDs to invite at once.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [itemId]
+              properties:
+                itemId: { type: string }
+                title: { type: string }
+                position: { type: number, description: Seconds }
+                playing: { type: boolean }
+                invite: { type: array, items: { type: string } }
+      responses:
+        "201": { description: The party }
+  /parties/join:
+    post:
+      summary: Join with a 4-letter code, or by id to accept an invite.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { code: { type: string }, id: { type: string } } }
+      responses:
+        "200": { description: The party }
+        "404": { description: No party has that code }
+        "409": { description: The party is full }
+        "410": { description: The party has ended }
+  /parties/{id}/leave:
+    post:
+      summary: Leave. The longest-standing member becomes host; an empty party ends.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Left }
+  /parties/{id}/decline:
+    post:
+      summary: Turn down an invite.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Declined }
+  /parties/{id}/invite:
+    post:
+      summary: Invite devices by ID.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { devices: { type: array, items: { type: string } } } }
+      responses:
+        "200": { description: The party }
+  /parties/{id}/control:
+    post:
+      summary: >-
+        Play, pause, seek or load (a new title) for everyone. Starts are
+        scheduled a second ahead on the server clock so every device starts
+        on the same frame; seeks and loads wait until every device is ready.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [play, pause, seek, load] }
+                position: { type: number }
+                itemId: { type: string }
+                title: { type: string }
+                autoplay: { type: boolean }
+      responses:
+        "200": { description: The party }
+  /parties/{id}/report:
+    post:
+      summary: A member reporting how it's doing; answers with the party.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                itemId: { type: string }
+                position: { type: number }
+                playing: { type: boolean }
+                stalled: { type: boolean }
+                ready: { type: boolean }
+                driftMs: { type: number }
+      responses:
+        "200": { description: The party }
+  /parties/{id}/wait:
+    get:
+      summary: >-
+        Long-poll: answers when the party's revision passes `rev` (200), after
+        25 seconds with nothing new (204), or when the party ended (410).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: rev, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: The party }
+        "204": { description: Nothing new }
+        "410": { description: The party ended }

@@ -65,6 +65,52 @@ type Scanner struct {
 	mu       sync.Mutex
 	progress map[int64]*Progress
 	again    map[int64]bool // scan once more when the running one ends
+	// changes collects what each running scan added and removed.
+	changes   map[int64]*Changes
+	onChanges func(libraryID int64, p Progress, c Changes)
+}
+
+// Changes is what a finished scan added and removed, for the webhooks.
+type Changes struct {
+	// Folder is the folder scanned, when only one was ("" for all).
+	Folder string
+	// Added lists new movies, shows and episodes. A new show's episodes
+	// are left out: the show stands for them.
+	Added []string
+	// Removed lists movies and episodes whose every file went missing.
+	Removed []string
+	TookSec int64
+
+	newShows map[string]bool
+}
+
+// SetOnChanges sets a function called after each scan that completes, with
+// what it changed.
+func (s *Scanner) SetOnChanges(f func(libraryID int64, p Progress, c Changes)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChanges = f
+}
+
+// noteAdded records a new item for the running scan. parentShow is the
+// show of a new episode ("" otherwise).
+func (s *Scanner) noteAdded(libraryID int64, id, kind, parentShow string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.changes[libraryID]
+	if c == nil {
+		return
+	}
+	if kind == store.ItemShow {
+		if c.newShows == nil {
+			c.newShows = map[string]bool{}
+		}
+		c.newShows[id] = true
+	}
+	if kind == store.ItemEpisode && c.newShows[parentShow] {
+		return
+	}
+	c.Added = append(c.Added, id)
 }
 
 // Progress returns a copy of a library's scan progress.
@@ -87,6 +133,16 @@ func (s *Scanner) update(libraryID int64, f func(p *Progress)) {
 // Start begins a scan in the background. It returns ErrBusy if the library
 // is already being scanned.
 func (s *Scanner) Start(ctx context.Context, libraryID int64) error {
+	return s.start(ctx, libraryID, "")
+}
+
+// StartFolder scans just one folder inside a library (an absolute path
+// inside one of its folders), which is much quicker than a whole scan.
+func (s *Scanner) StartFolder(ctx context.Context, libraryID int64, folder string) error {
+	return s.start(ctx, libraryID, filepath.Clean(folder))
+}
+
+func (s *Scanner) start(ctx context.Context, libraryID int64, only string) error {
 	s.mu.Lock()
 	if s.progress == nil {
 		s.progress = map[int64]*Progress{}
@@ -96,10 +152,14 @@ func (s *Scanner) Start(ctx context.Context, libraryID int64) error {
 		return ErrBusy
 	}
 	s.progress[libraryID] = &Progress{LibraryID: libraryID, Running: true, Phase: "walking", StartedAt: time.Now().Unix()}
+	if s.changes == nil {
+		s.changes = map[int64]*Changes{}
+	}
+	s.changes[libraryID] = &Changes{Folder: only}
 	s.mu.Unlock()
 
 	go func() {
-		err := s.run(ctx, libraryID)
+		err := s.run(ctx, libraryID, only)
 		s.update(libraryID, func(p *Progress) {
 			p.Running = false
 			p.FinishedAt = time.Now().Unix()
@@ -112,6 +172,15 @@ func (s *Scanner) Start(ctx context.Context, libraryID int64) error {
 		})
 		if err != nil {
 			s.Log.Error("scan failed", "library", libraryID, "err", err)
+		}
+		s.mu.Lock()
+		changes, onChanges := s.changes[libraryID], s.onChanges
+		delete(s.changes, libraryID)
+		s.mu.Unlock()
+		if err == nil && onChanges != nil && changes != nil {
+			p, _ := s.Progress(libraryID)
+			changes.TookSec = p.FinishedAt - p.StartedAt
+			onChanges(libraryID, p, *changes)
 		}
 		if s.OnDone != nil {
 			s.OnDone(libraryID)
@@ -182,10 +251,13 @@ type result struct {
 	err   error
 }
 
-func (s *Scanner) run(ctx context.Context, libraryID int64) error {
+func (s *Scanner) run(ctx context.Context, libraryID int64, only string) error {
 	lib, err := s.Store.GetLibrary(ctx, libraryID)
 	if err != nil {
 		return err
+	}
+	if only != "" && folderOf(lib, only) == "" {
+		return fmt.Errorf("%s is not inside this library's folders", only)
 	}
 	scanStart := time.Now().Unix()
 	s.Log.Info("scan started", "library", lib.Name, "folders", lib.Folders)
@@ -234,7 +306,7 @@ func (s *Scanner) run(ctx context.Context, libraryID int64) error {
 	go func() {
 		defer close(jobs)
 		var err error
-		unchanged, dropped, err = s.walk(ctx, lib, known, jobs)
+		unchanged, dropped, err = s.walk(ctx, lib, only, known, jobs)
 		s.update(libraryID, func(p *Progress) {
 			if p.Phase == "walking" {
 				p.Phase = "probing"
@@ -267,9 +339,30 @@ func (s *Scanner) run(ctx context.Context, libraryID int64) error {
 		return err
 	}
 
-	missing, err := s.Store.MarkMissing(ctx, libraryID, scanStart)
+	// What is about to go missing, so the webhooks can be told.
+	under := ""
+	if only != "" {
+		under = only + string(filepath.Separator)
+	}
+	going, err := s.Store.GoingMissing(ctx, libraryID, scanStart, under)
 	if err != nil {
 		return err
+	}
+	var missing int64
+	if only != "" {
+		missing, err = s.Store.MarkMissingUnder(ctx, libraryID, scanStart, under)
+	} else {
+		missing, err = s.Store.MarkMissing(ctx, libraryID, scanStart)
+	}
+	if err != nil {
+		return err
+	}
+	if gone, err := s.Store.WithoutFiles(ctx, going); err == nil && len(gone) > 0 {
+		s.mu.Lock()
+		if c := s.changes[libraryID]; c != nil {
+			c.Removed = append(c.Removed, gone...)
+		}
+		s.mu.Unlock()
 	}
 	inferred, err := s.inferEpisodes(ctx, lib)
 	if err != nil {
@@ -320,9 +413,12 @@ var discDirs = map[string]bool{"bdmv": true, "video_ts": true, "certificate": tr
 // (extras, samples, disc folders), so stale "can't place" records can be
 // removed. A folder that can't be read fails the scan, so an unplugged
 // drive is never taken as "every file deleted".
-func (s *Scanner) walk(ctx context.Context, lib store.Library, known map[string]store.Version, jobs chan<- job) (unchanged, dropped []string, err error) {
+func (s *Scanner) walk(ctx context.Context, lib store.Library, only string, known map[string]store.Version, jobs chan<- job) (unchanged, dropped []string, err error) {
+	if only != "" {
+		return s.walkFolder(ctx, lib, folderOf(lib, only), only, known, jobs)
+	}
 	for _, root := range lib.Folders {
-		u, d, err := s.walkFolder(ctx, lib, root, known, jobs)
+		u, d, err := s.walkFolder(ctx, lib, root, root, known, jobs)
 		unchanged = append(unchanged, u...)
 		dropped = append(dropped, d...)
 		if err != nil {
@@ -332,9 +428,21 @@ func (s *Scanner) walk(ctx context.Context, lib store.Library, known map[string]
 	return unchanged, dropped, nil
 }
 
-// walkFolder walks one library folder. Paths in the library are relative to
-// the folder the file was found in.
-func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root string, known map[string]store.Version, jobs chan<- job) (unchanged, dropped []string, err error) {
+// folderOf is the library folder a path is inside ("" if none).
+func folderOf(lib store.Library, path string) string {
+	for _, f := range lib.Folders {
+		rel, err := filepath.Rel(f, path)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return f
+		}
+	}
+	return ""
+}
+
+// walkFolder walks one library folder (root), or from start, a folder
+// inside it. Paths in the library are relative to the folder the file was
+// found in.
+func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root, start string, known map[string]store.Version, jobs chan<- job) (unchanged, dropped []string, err error) {
 	stable := s.StableAge
 	if stable == 0 {
 		stable = time.Minute
@@ -348,20 +456,20 @@ func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root string
 			}
 		}
 	}
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(start, func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if err != nil {
-			if path == root {
-				return fmt.Errorf("library folder %s: %w", root, err)
+			if path == start {
+				return fmt.Errorf("library folder %s: %w", start, err)
 			}
 			s.Log.Warn("walk", "path", path, "err", err)
 			return nil
 		}
 		name := d.Name()
 		if d.IsDir() {
-			if path == root {
+			if path == start {
 				return nil
 			}
 			lower := strings.ToLower(name)
@@ -566,6 +674,7 @@ func (s *Scanner) place(ctx context.Context, lib store.Library, p parse.Result, 
 				return "", err
 			}
 			epID = ep.ID
+			s.noteAdded(lib.ID, epID, store.ItemEpisode, showID)
 		}
 		return epID, nil
 	}
@@ -582,6 +691,7 @@ func (s *Scanner) findOrCreate(ctx context.Context, it store.Item, tmdbProvider 
 	if err := s.Store.CreateItem(ctx, &it); err != nil {
 		return "", err
 	}
+	s.noteAdded(it.LibraryID, it.ID, it.Kind, "")
 	if p.TMDBID > 0 {
 		if err := s.Store.SetExternalID(ctx, it.ID, tmdbProvider, fmt.Sprint(p.TMDBID)); err != nil {
 			return "", err

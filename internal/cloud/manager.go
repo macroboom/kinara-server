@@ -54,6 +54,10 @@ type Manager struct {
 	Iroh    Iroh
 	// HTTPClient talks to the cloud (tests set one).
 	HTTPClient *http.Client
+	// RelaysChanged is called (in its own goroutine) when the iroh relays to
+	// use change: on linking, unlinking, or a new list from the cloud. The
+	// sidecar only reads them when it starts, so it restarts on this.
+	RelaysChanged func()
 
 	file   stateFile
 	client *client
@@ -144,6 +148,11 @@ func (m *Manager) Run(ctx context.Context) {
 	m.state = st
 	m.mu.Unlock()
 	m.loadCert()
+	// Remote access may have started before the saved link was read, and so
+	// without our relays: let it check (it restarts only if they differ).
+	if st != nil && len(st.IrohRelays) > 0 {
+		m.relaysChanged()
+	}
 
 	if m.S.HTTPSPort > 0 {
 		go m.serveHTTPS(ctx)
@@ -290,6 +299,7 @@ func (m *Manager) pollLink(ctx context.Context, ls linkStart, userID int64) {
 		m.state, m.link = s, nil
 		m.mu.Unlock()
 		m.Log.Info("cloud: linked", "server", s.ServerID, "account", s.Owner.Email)
+		m.relaysChanged()
 		m.poke()
 		return
 	}
@@ -317,7 +327,14 @@ func (m *Manager) Unlink(ctx context.Context) error {
 	}
 	os.Remove(filepath.Join(m.S.DataDir, "cloud", "cert.pem"))
 	os.Remove(filepath.Join(m.S.DataDir, "cloud", "key.pem"))
+	m.relaysChanged()
 	return m.file.save(nil)
+}
+
+func (m *Manager) relaysChanged() {
+	if m.RelaysChanged != nil {
+		go m.RelaysChanged()
+	}
 }
 
 // VerifyAccess checks an app's account token for this server and returns
@@ -389,15 +406,21 @@ func (m *Manager) report(ctx context.Context) time.Duration {
 			m.Log.Warn("cloud: this server was removed from its account; unlinking")
 			m.state, m.cert = nil, nil
 			go m.file.save(nil)
+			m.relaysChanged()
 		}
 		return 30 * time.Second
 	}
 	m.lastErr, m.last, m.reported = "", &got, time.Now()
 	// Pick up a new cloud key or relay list.
 	if got.CloudKey != "" && (got.CloudKey != m.state.CloudKey || strings.Join(got.IrohRelays, ",") != strings.Join(m.state.IrohRelays, ",")) {
+		relays := strings.Join(got.IrohRelays, ",") != strings.Join(m.state.IrohRelays, ",")
 		m.state.CloudKey, m.state.CloudKeyID, m.state.IrohRelays = got.CloudKey, got.CloudKeyID, got.IrohRelays
 		s := *m.state
 		go m.file.save(&s)
+		if relays {
+			m.Log.Info("cloud: new iroh relays", "relays", got.IrohRelays)
+			m.relaysChanged()
+		}
 	}
 	return time.Minute
 }

@@ -118,7 +118,7 @@ func TestToneMapDeclaresSourceAndCleansUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := Args(r, caps)
-	vf := a[indexOf(a, "-vf")+1]
+	vf := videoFilterArg(a)
 	if !strings.Contains(vf, "color_trc=arib-std-b67") || !strings.Contains(vf, "tonemap") || !strings.HasSuffix(vf, ffmpeg.SideDataHDR10) {
 		t.Errorf("hlg filter %q", vf)
 	}
@@ -129,7 +129,7 @@ func TestToneMapDeclaresSourceAndCleansUp(t *testing.T) {
 	r.HDR = "dolby_vision"
 	r.DV = probe.DolbyVision{Profile: 8, Compat: 2, BL: true, RPU: true}
 	a = Args(r, caps)
-	vf = a[indexOf(a, "-vf")+1]
+	vf = videoFilterArg(a)
 	if strings.Contains(vf, "tonemap") || has(a, ffmpeg.SDROutputArgs...) {
 		t.Errorf("sdr base: %q %v", vf, a)
 	}

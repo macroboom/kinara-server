@@ -123,6 +123,7 @@ func (s *Server) notePlay(r *http.Request, u store.User, it store.Item, versionI
 		}
 	}
 	s.playing.note(p)
+	s.notePlayback(r, u, it, versionID, pos, dur)
 }
 
 // streamOwner says who a conversion is for: the device asking, and whether

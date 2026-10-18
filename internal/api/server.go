@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kinora/internal/auth"
@@ -69,6 +70,13 @@ type Server struct {
 
 	// playing is what each device last reported playing.
 	playing nowPlaying
+	// LANPort is the plain HTTP port the server listens on, for addresses a
+	// Chromecast on the home network can reach (see cast.go).
+	LANPort int
+	// libraryRev changes when a scan or a match changes the library (see pulse.go).
+	libraryRev atomic.Int64
+	// party runs watch parties (see party.go).
+	party partyState
 
 	// Metrics samples the computer and traffic (nil: off).
 	Metrics *metrics.Collector
@@ -76,6 +84,8 @@ type Server struct {
 	Logs *metrics.LogRing
 	// DataDir is the server's data folder, for storage numbers.
 	DataDir string
+	// CacheDir is the cache folder (DATA/cache unless set apart), for storage numbers.
+	CacheDir string
 
 	httpStats metrics.HTTPStats
 	storage   storageCache
@@ -105,6 +115,12 @@ type Server struct {
 	nodeSeen sync.Map
 	tmpl     *template.Template
 	trending trendingCache
+	// external keeps TMDB titles opened from outside the library.
+	external externalCache
+	// integ runs outgoing webhooks, incoming hooks and API keys (integrations*.go).
+	integ integrationsState
+	// reqs holds requests and the discover cache (requests*.go, discover*.go).
+	reqs requestsState
 }
 
 // Handler builds the routes.
@@ -163,6 +179,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/tmdb-image/{file}", s.userQuery(s.tmdbImage))
 	mux.Handle("GET /api/v1/genres", s.user(s.listGenres))
 	mux.Handle("GET /api/v1/trending", s.user(s.trendingHandler))
+	mux.Handle("GET /api/v1/tmdb/{kind}/{id}", s.user(s.externalTitle))
+	mux.Handle("GET /api/v1/tmdb/show/{id}/season/{n}", s.user(s.externalSeason))
+	mux.Handle("GET /api/v1/tmdb/{kind}/{id}/similar", s.user(s.externalSimilar))
+	mux.Handle("GET /api/v1/items/{id}/similar", s.user(s.itemSimilar))
 	mux.Handle("GET /api/v1/lists", s.user(s.getLists))
 	mux.Handle("POST /api/v1/lists", s.user(s.createList))
 	mux.Handle("PATCH /api/v1/lists/{id}", s.user(s.renameList))
@@ -193,6 +213,18 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/cloud/unlink", s.admin(s.cloudUnlink))
 	mux.Handle("GET /api/v1/playback/advice", s.user(s.playbackAdvice))
 	mux.Handle("GET /api/v1/playback", s.admin(s.nowPlayingList))
+	mux.HandleFunc("GET /api/v1/time", s.serverTime)
+	mux.Handle("GET /api/v1/parties/mine", s.user(s.partyMine))
+	mux.Handle("GET /api/v1/parties/devices", s.user(s.partyDevices))
+	mux.Handle("POST /api/v1/parties", s.user(s.partyCreate))
+	mux.Handle("POST /api/v1/parties/join", s.user(s.partyJoin))
+	mux.Handle("POST /api/v1/parties/{id}/leave", s.user(s.partyLeave))
+	mux.Handle("POST /api/v1/parties/{id}/decline", s.user(s.partyDecline))
+	mux.Handle("POST /api/v1/parties/{id}/invite", s.user(s.partyInvite))
+	mux.Handle("POST /api/v1/parties/{id}/control", s.user(s.partyControl))
+	mux.Handle("POST /api/v1/parties/{id}/report", s.user(s.partyReport))
+	mux.Handle("GET /api/v1/parties/{id}/wait", s.user(s.partyWait))
+	mux.Handle("PUT /api/v1/me/device/name", s.user(s.renameMyDevice))
 	mux.Handle("GET /api/v1/devices", s.admin(s.devices))
 	mux.Handle("DELETE /api/v1/devices/{id}", s.admin(s.signOutDevice))
 	mux.Handle("GET /api/v1/metrics/live", s.admin(s.metricsLive))
@@ -206,6 +238,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/remote/unblock", s.admin(s.remoteUnblock))
 	mux.Handle("GET /api/v1/settings", s.admin(s.getSettings))
 	mux.Handle("PUT /api/v1/settings", s.admin(s.putSettings))
+
+	// Integrations (webhooks, incoming hooks, API keys) and requests.
+	s.integrationRoutes(mux)
+	s.requestRoutes(mux)
 
 	// The web player and manager.
 	mux.Handle("GET /app/", s.webApp())
@@ -266,6 +302,10 @@ func (s *Server) lookup(r *http.Request, allowQuery bool) (authed, bool) {
 
 func (s *Server) authenticate(h userHandler, adminOnly, allowQuery bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// API keys reach only the endpoints listed in integrations_keys.go.
+		if s.serveAPIKey(w, r, h) {
+			return
+		}
 		a, ok := s.lookup(r, allowQuery)
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "sign in required")
@@ -361,11 +401,29 @@ func (s *Server) logRequest(r *http.Request, sw *statusWriter, start time.Time) 
 	if sw.status >= 500 {
 		level = slog.LevelError
 	} else if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/v1/images/") &&
-		!strings.HasPrefix(r.URL.Path, "/api/v1/hls/session/") {
+		!strings.HasPrefix(r.URL.Path, "/api/v1/hls/session/") && !(sw.status < 400 && routine(r)) {
 		level = slog.LevelInfo
 	}
 	s.Log.Log(r.Context(), level, "request", "method", r.Method, "path", r.URL.Path,
 		"status", sw.status, "ms", time.Since(start).Milliseconds())
+}
+
+// routine is a request apps and pages repeat every few seconds on their
+// own (checking for changes, playback position and advice, live charts).
+// It's only logged with -debug, unless it fails.
+func routine(r *http.Request) bool {
+	p := r.URL.Path
+	switch {
+	case r.Method == http.MethodGet && (p == "/api/v1/pulse" || p == "/api/v1/health" || p == "/api/v1/ontheway" ||
+		p == "/api/v1/playback" || p == "/api/v1/playback/advice" || p == "/api/v1/requests"):
+		return true
+	case r.Method == http.MethodGet && (strings.HasPrefix(p, "/api/v1/metrics") || strings.HasPrefix(p, "/api/v1/integrations/") ||
+		strings.HasPrefix(p, "/api/v1/trickplay/")):
+		return true
+	case r.Method == http.MethodPut && strings.HasPrefix(p, "/api/v1/progress/"):
+		return true
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -205,7 +205,11 @@ type TVDetails struct {
 		SeasonNumber int    `json:"season_number"`
 		Name         string `json:"name"`
 		EpisodeCount int    `json:"episode_count"`
+		AirDate      string `json:"air_date"`
+		PosterPath   string `json:"poster_path"`
 	} `json:"seasons"`
+	// Status is "Returning Series", "Ended", "Canceled" and the like.
+	Status string `json:"status"`
 }
 
 type SeasonDetails struct {

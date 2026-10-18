@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"os/exec"
 	"strings"
 	"sync"
@@ -206,7 +207,8 @@ const DoviStripBSF = "dovi_rpu=strip=1,filter_units=remove_types=63"
 // CUDAScale scales frames already on an NVIDIA card down to a height (never
 // up) and to 8-bit 4:2:0, which NVENC's H.264 encoder needs.
 func CUDAScale(height int) string {
-	return fmt.Sprintf("scale_cuda=w=-2:h='min(ih,%d)':format=yuv420p", height)
+	w, h := Fit(height)
+	return fmt.Sprintf("scale_cuda=w=%s:h=%s:format=yuv420p", w, h)
 }
 
 // NVDEC lists the source codecs NVIDIA cards decode (RTX 20 series and
@@ -251,3 +253,17 @@ func (t *Tail) Write(p []byte) (int, error) {
 }
 
 func (t *Tail) String() string { return strings.TrimSpace(string(t.buf)) }
+
+// Fit returns ffmpeg size expressions (quoted, for w= and h=) that shrink a
+// picture to fit inside the 16:9 box of a height: 1080 means 1920x1080. A
+// limit on the height alone isn't enough: a 3840x1600 film limited to 1080
+// lines comes out 2592 wide, which a 1080p player can't decode (a Roku
+// fetches it and never starts). Never enlarges; both sides stay even.
+func Fit(height int) (w, h string) {
+	// Rounded up to even, so the height limit decides for a 16:9 picture
+	// (480 lines: 854 wide, not 852).
+	maxW := int(math.Ceil(float64(height) * 16 / 9))
+	maxW += maxW & 1
+	k := fmt.Sprintf("min(1,min(%d/iw,%d/ih))", maxW, height)
+	return fmt.Sprintf("'trunc(iw*%s/2)*2'", k), fmt.Sprintf("'trunc(ih*%s/2)*2'", k)
+}

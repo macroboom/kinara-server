@@ -65,8 +65,9 @@ func (s *Server) cloudUnlink(w http.ResponseWriter, r *http.Request, u store.Use
 // /v1/servers/{id}/access) into a session on this server.
 func (s *Server) cloudSignIn(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Token      string `json:"token"`
-		DeviceName string `json:"deviceName"`
+		Token      string      `json:"token"`
+		DeviceName string      `json:"deviceName"`
+		Device     *deviceInfo `json:"device"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -97,7 +98,7 @@ func (s *Server) cloudSignIn(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	device := req.DeviceName
+	device := sessionDeviceName(req.DeviceName, req.Device)
 	if device == "" {
 		device = r.UserAgent()
 	}
@@ -108,7 +109,9 @@ func (s *Server) cloudSignIn(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.attachDevice(r, token, req.Device)
 	s.noteNode(r, hash)
+	s.noteSignIn(r, u, hash)
 	profiles, _ := s.Store.Profiles(r.Context(), u.ID)
 	if profiles == nil {
 		profiles = []store.Profile{}

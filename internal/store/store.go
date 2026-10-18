@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,6 +30,9 @@ var ErrNotFound = errors.New("not found")
 // Store wraps the SQLite database.
 type Store struct {
 	db *sql.DB
+	// requestsRev changes whenever a request or an on-the-way status does,
+	// so apps can ask cheaply whether to reload (see RequestsRevision).
+	requestsRev atomic.Int64
 }
 
 // Open opens (creating if needed) the database at path and applies migrations.

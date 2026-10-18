@@ -13,6 +13,17 @@ const (
 	MaxIntro = 150.0
 )
 
+// Bounds is the accepted length, in seconds, of a shared segment.
+type Bounds struct{ Min, Max float64 }
+
+var (
+	// IntroBounds is what Compare and Detect accept: opening titles.
+	IntroBounds = Bounds{MinIntro, MaxIntro}
+	// CreditsBounds is for end credits, compared over the end of each
+	// episode: longer than a theme song can be, but never most of the end.
+	CreditsBounds = Bounds{15, 330}
+)
+
 const (
 	// maxBitErrors is the largest Hamming distance (out of 32 bits),
 	// averaged over smoothFrames aligned frames, at which the frames are
@@ -54,6 +65,11 @@ func (r Range) Duration() float64 { return r.End - r.Start }
 // and the longest run of matching frames (allowing gaps of up to 1.5 s) wins.
 // Silent frames never match.
 func Compare(a, b []uint32) (ra, rb Range, ok bool) {
+	return CompareIn(a, b, IntroBounds)
+}
+
+// CompareIn is Compare with other length bounds.
+func CompareIn(a, b []uint32, bounds Bounds) (ra, rb Range, ok bool) {
 	if len(a) == 0 || len(b) == 0 {
 		return Range{}, Range{}, false
 	}
@@ -95,7 +111,7 @@ func Compare(a, b []uint32) (ra, rb Range, ok bool) {
 	}
 	qualifies := func(i0, i1 int) bool {
 		d := span(i0, i1).Duration()
-		return d >= MinIntro && d <= MaxIntro
+		return d >= bounds.Min && d <= bounds.Max
 	}
 
 	best := -1.0

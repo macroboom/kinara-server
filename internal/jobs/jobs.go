@@ -1,6 +1,6 @@
 // Package jobs runs slow background work one item at a time: preview
-// thumbnails for every file, and intro detection for TV seasons. Work for
-// a title someone just started playing jumps the queue.
+// thumbnails for every file, and intro and end credits detection for TV
+// seasons. Work for a title someone just started playing jumps the queue.
 package jobs
 
 import (
@@ -47,6 +47,7 @@ type Status struct {
 	Doing        string `json:"doing,omitempty"`
 	PreviewsMade int    `json:"previewsMade"`
 	IntrosFound  int    `json:"introsFound"`
+	CreditsFound int    `json:"creditsFound"`
 	SeasonsDone  int    `json:"seasonsDone"`
 	PicturesMade int    `json:"picturesMade"`
 	// Current is the job running now, if any.
@@ -66,7 +67,8 @@ type Task struct {
 	StartedAt int64   `json:"startedAt"`
 	TookSec   float64 `json:"tookSec,omitempty"`
 	Failed    bool    `json:"failed,omitempty"`
-	// Result says what came of it ("14 of 16 episodes have an intro").
+	// Result says what came of it ("14 of 16 episodes have an intro, 12 have
+	// end credits").
 	Result string `json:"result,omitempty"`
 }
 
@@ -301,6 +303,8 @@ func (w *Worker) makePreviews(ctx context.Context, v store.Version) {
 // start within the first few minutes, after any cold open.
 const introAudio = 10 * time.Minute
 
+// detectSeason finds the intros and end credits of a season's episodes,
+// each only when some episode hasn't been checked for it yet.
 func (w *Worker) detectSeason(ctx context.Context, seasonID string) {
 	files, err := w.Store.SeasonIntroFiles(ctx, seasonID)
 	if err != nil {
@@ -310,12 +314,15 @@ func (w *Worker) detectSeason(ctx context.Context, seasonID string) {
 	// One file per episode (the best copy is listed first).
 	var eps []store.IntroCandidate
 	seen := map[int]bool{}
+	needIntros, needCredits := false, false
 	for _, f := range files {
 		if seen[f.Episode] {
 			continue
 		}
 		seen[f.Episode] = true
 		eps = append(eps, f)
+		needIntros = needIntros || !f.Checked
+		needCredits = needCredits || !f.CreditsChecked
 	}
 	if len(eps) == 0 {
 		return
@@ -327,11 +334,63 @@ func (w *Worker) detectSeason(ctx context.Context, seasonID string) {
 	w.status.Current.Name = task.Name
 	w.mu.Unlock()
 	start := time.Now()
+
+	var parts []string
+	unread := 0
+	intros, credits := -1, -1
+	if needIntros {
+		intros, unread = w.seasonIntros(ctx, eps)
+		if ctx.Err() != nil {
+			return
+		}
+		parts = append(parts, fmt.Sprintf("%d of %d episodes have an intro", intros, len(eps)))
+	}
+	if needCredits {
+		credits = w.seasonCredits(ctx, eps)
+		if ctx.Err() != nil {
+			return
+		}
+		if needIntros {
+			parts = append(parts, fmt.Sprintf("%d have end credits", credits))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d of %d episodes have end credits", credits, len(eps)))
+		}
+	}
+	// Other copies of the same episodes get checked too, so the season
+	// isn't picked again because of them.
+	for _, f := range files {
+		if containsVersion(eps, f.VersionID) {
+			continue
+		}
+		if !f.Checked {
+			_ = w.Store.SetIntro(ctx, f.VersionID, store.Intro{}, f.Mtime)
+		}
+		if !f.CreditsChecked {
+			_ = w.Store.SetEndCredits(ctx, f.VersionID, store.EndCredits{}, f.Mtime)
+		}
+	}
+	w.mu.Lock()
+	w.status.IntrosFound += max(intros, 0)
+	w.status.CreditsFound += max(credits, 0)
+	w.status.SeasonsDone++
+	w.mu.Unlock()
+	if unread > 0 {
+		parts = append(parts, fmt.Sprintf("%d couldn't be read", unread))
+	}
+	task.Path = filepath.Dir(eps[0].Path)
+	w.finish(task, needIntros && unread == len(eps), strings.Join(parts, ", "))
+	w.Log.Info("intro detection", "season", seasonID, "episodes", len(eps), "intros", intros, "credits", credits,
+		"took", time.Since(start).Round(100*time.Millisecond))
+}
+
+// seasonIntros finds and saves the intro of each episode, and returns how
+// many have one and how many couldn't be read.
+func (w *Worker) seasonIntros(ctx context.Context, eps []store.IntroCandidate) (found, unread int) {
 	prints := make([][]uint32, len(eps))
 	readable := make([]bool, len(eps))
 	for i, f := range eps {
 		if ctx.Err() != nil {
-			return
+			return 0, 0
 		}
 		w.step("intro detection", f.Path)
 		samples, err := intro.Decode(ctx, w.Tool.Path(), f.Path, introAudio)
@@ -342,50 +401,80 @@ func (w *Worker) detectSeason(ctx context.Context, seasonID string) {
 		prints[i] = intro.Fingerprint(samples)
 		readable[i] = true
 	}
-	found := intro.Detect(prints)
-	n := 0
+	ranges := intro.Detect(prints)
 	for i, f := range eps {
+		in := store.Intro{}
 		if !readable[i] {
 			// Couldn't read it: mark it checked anyway so the season isn't
 			// retried every pass. A replaced file is checked again.
-			_ = w.Store.SetIntro(ctx, f.VersionID, store.Intro{}, f.Mtime)
-			continue
-		}
-		r, ok := found[i]
-		in := store.Intro{}
-		if ok {
+			unread++
+		} else if r, ok := ranges[i]; ok {
 			in = store.Intro{Start: r.Start, End: r.End}
-			n++
+			found++
 		}
 		if err := w.Store.SetIntro(ctx, f.VersionID, in, f.Mtime); err != nil {
 			w.Log.Warn("save intro", "err", err)
 		}
 	}
-	// Other copies of the same episodes get checked too, so the season
-	// isn't picked again because of them.
-	for _, f := range files {
-		if !f.Checked && !containsVersion(eps, f.VersionID) {
-			_ = w.Store.SetIntro(ctx, f.VersionID, store.Intro{}, f.Mtime)
+	return found, unread
+}
+
+// seasonCredits finds and saves the end credits of each episode, and
+// returns how many have them. The ends of the episodes are compared by
+// audio first; an episode whose credits share no audio with the others is
+// then checked by picture (text on black).
+func (w *Worker) seasonCredits(ctx context.Context, eps []store.IntroCandidate) (found int) {
+	prints := make([][]uint32, len(eps))
+	from := make([]time.Duration, len(eps))
+	length := make([]time.Duration, len(eps))
+	searchable := make([]bool, len(eps))
+	for i, f := range eps {
+		if ctx.Err() != nil {
+			return 0
 		}
-	}
-	w.mu.Lock()
-	w.status.IntrosFound += n
-	w.status.SeasonsDone++
-	w.mu.Unlock()
-	unread := 0
-	for _, ok := range readable {
+		length[i] = time.Duration(f.Duration * float64(time.Second))
+		start, ok := intro.TailStart(length[i])
 		if !ok {
-			unread++
+			continue // unknown length or very short: nothing to search
+		}
+		from[i], searchable[i] = start, true
+		w.step("credits detection", f.Path)
+		samples, err := intro.DecodeFrom(ctx, w.Tool.Path(), f.Path, start, length[i]-start)
+		if err != nil {
+			w.Log.Warn("credits audio", "file", f.Path, "err", err)
+			continue
+		}
+		prints[i] = intro.Fingerprint(samples)
+	}
+	ranges := intro.DetectIn(prints, intro.CreditsBounds)
+	for i, f := range eps {
+		if ctx.Err() != nil {
+			return 0
+		}
+		c := store.EndCredits{}
+		off := from[i].Seconds()
+		if r, ok := ranges[i]; ok && searchable[i] {
+			c = store.EndCredits{Start: r.Start + off, End: r.End + off, Source: "audio"}
+		} else if searchable[i] {
+			w.step("credits detection (picture)", f.Path)
+			r, ok, err := intro.BlackCredits(ctx, w.Tool.Path(), f.Path, from[i], length[i]-from[i])
+			if ctx.Err() != nil {
+				return 0
+			}
+			if err != nil {
+				w.Log.Warn("credits picture", "file", f.Path, "err", err)
+			} else if ok {
+				c = store.EndCredits{Start: r.Start, End: r.End, Source: "picture"}
+			}
+		}
+		if c.End > 0 {
+			found++
+		}
+		if err := w.Store.SetEndCredits(ctx, f.VersionID, c, f.Mtime); err != nil {
+			w.Log.Warn("save credits", "err", err)
 		}
 	}
-	result := fmt.Sprintf("%d of %d episodes have an intro", n, len(eps))
-	if unread > 0 {
-		result += fmt.Sprintf(", %d couldn't be read", unread)
-	}
-	task.Path = filepath.Dir(eps[0].Path)
-	w.finish(task, unread == len(eps), result)
-	w.Log.Info("intro detection", "season", seasonID, "episodes", len(eps), "intros", n,
-		"took", time.Since(start).Round(100*time.Millisecond))
+	return found
 }
 
 func containsVersion(list []store.IntroCandidate, id string) bool {

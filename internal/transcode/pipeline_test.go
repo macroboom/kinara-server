@@ -49,7 +49,7 @@ func TestPlanVideoBackends(t *testing.T) {
 		HWInit: []string{"-init_hw_device", "vaapi=hw:/dev/dri/renderD128", "-filter_hw_device", "hw"}, VAAPIRateControl: "CBR"}
 
 	p := planVideo(sdr, vaapi)
-	if !has(p.input, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi") || p.vf != "scale_vaapi=w=-2:h='min(ih,720)':format=nv12" {
+	if !has(p.input, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi") || p.vf != "scale_vaapi="+fit(720)+":format=nv12" {
 		t.Errorf("vaapi sdr: %+v", p)
 	}
 	p = planVideo(hdr, vaapi)
@@ -76,7 +76,7 @@ func TestPlanVideoBackends(t *testing.T) {
 	}
 
 	amf := ffmpeg.Caps{Found: true, H264Encoder: "h264_amf", HW: ffmpeg.HWAMF, Software: true}
-	if p = planVideo(sdr, amf); !has(p.input, "-hwaccel", "d3d11va") || !strings.HasPrefix(p.vf, "scale=-2") {
+	if p = planVideo(sdr, amf); !has(p.input, "-hwaccel", "d3d11va") || !strings.HasPrefix(p.vf, "scale="+fit(720)) {
 		t.Errorf("amf: %+v", p)
 	}
 }
@@ -137,7 +137,7 @@ func TestHDRToCardTagsInChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := Args(r, vaapi)
-	vf := a[indexOf(a, "-vf")+1]
+	vf := videoFilterArg(a)
 	if has(a, "-colorspace", "bt709") || !strings.Contains(vf, "setparams=range=tv:color_primaries=bt709") || !strings.HasSuffix(vf, "hwupload") {
 		t.Errorf("gpu frames: %v", a)
 	}

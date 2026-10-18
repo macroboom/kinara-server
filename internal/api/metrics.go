@@ -161,7 +161,13 @@ func (s *Server) buildStorage(r *http.Request) (*storageView, error) {
 	sort.Slice(v.Libraries, func(i, j int) bool { return v.Libraries[i].Bytes > v.Libraries[j].Bytes })
 	if s.DataDir != "" {
 		addVolume(s.DataDir, "", true)
-		cacheDir := filepath.Join(s.DataDir, "cache")
+		cacheDir := s.CacheDir
+		if cacheDir == "" {
+			cacheDir = filepath.Join(s.DataDir, "cache")
+		} else {
+			// A cache on another disk shows up as that disk (same disk: merged).
+			addVolume(cacheDir, "", true)
+		}
 		if entries, err := os.ReadDir(cacheDir); err == nil {
 			for _, e := range entries {
 				if !e.IsDir() {

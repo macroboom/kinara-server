@@ -36,7 +36,7 @@ func TestExtractFromMKV(t *testing.T) {
 	var events []TimelineEvent
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		tl, err = x.Timeline("v1", mkv, 42, 1, len(events))
+		tl, err = x.Timeline("v1", mkv, 42, 1, "hdmv_pgs_subtitle", len(events))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -70,7 +70,7 @@ func TestExtractFromMKV(t *testing.T) {
 
 	// A fresh extractor (a restarted server) answers from disk, from any event.
 	y := &Extractor{Tool: &ffmpeg.Tool{}, Dir: filepath.Join(dir, "cache")}
-	again, err := y.Timeline("v1", mkv, 42, 1, 1)
+	again, err := y.Timeline("v1", mkv, 42, 1, "hdmv_pgs_subtitle", 1)
 	if err != nil || !again.Done || len(again.Events) != 1 || again.Total != 2 || again.Events[0].Start != 5 {
 		t.Fatalf("from disk: %+v %v", again, err)
 	}

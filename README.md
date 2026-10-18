@@ -189,6 +189,55 @@ and extras folders are skipped for now.
 Anything Kinora can't match shows up under **Needs a look** on the library
 page, where you can fix it with the TMDB ID.
 
+## Requests, Discover and devices
+
+Anyone signed in can request a movie or show that isn't on the server
+(`POST /api/v1/requests`; shows can ask for every season, some seasons or just
+the pilot). Owners approve or decline them under Manage > Requests. Approving
+emits `request.approved`, which your scripts and tools can pick up through a
+webhook. A request becomes "available" once the title shows up in a library.
+
+Apps describe themselves when they sign in (a `device` object with a stable
+install ID, platform, brand and model), so the device list shows what each
+device is. An owner can trust a device (`PUT /api/v1/clients/{clientId}`):
+its requests are approved straight away. Trust survives signing out and back
+in on the same install.
+
+`GET /api/v1/discover` serves the Discover page from TMDB (trending, new,
+popular, coming soon, classics, acclaimed series, and genres), refreshed
+hourly; `GET /api/v1/search/external` searches TMDB for titles that aren't in
+the library. Both need a TMDB key. See `openapi.yaml` for the shapes.
+
+## Integrations
+
+Connect your own scripts and tools under Manage > Integrations
+(`/api/v1/integrations/...`, see `openapi.yaml`).
+
+- **Outgoing webhooks.** Kinora posts JSON to your URLs when things happen
+  (titles added or removed, scans, playback, accounts, new devices, requests,
+  incoming updates, conversions that failed, remote access changes). Each
+  delivery is signed: `X-Kinora-Signature` is `sha256=` and the hex HMAC
+  SHA-256 of `<X-Kinora-Timestamp>.<body>` with the webhook's secret.
+  Deliveries to one webhook go out in order from a queue that survives
+  restarts; failures are retried with growing waits (about 1, 5 and 15
+  minutes, then 1, 2, 4, 8 and 12 hours, up to the webhook's retry count).
+  The log is kept 7 days. Only http and https addresses are used, and
+  redirects to another host are not followed. File paths are only sent to
+  webhooks that ask for them.
+- **Incoming hooks.** Each has a secret address
+  (`POST /api/v1/hooks/in/<token>`) that your tools post the status of titles
+  on their way to, in the Kinora format or their own JSON mapped field by
+  field. Titles are matched by TMDB, TVDB or IMDb ID, or title and year. The
+  apps show them as "On the way" (`GET /api/v1/ontheway`). "done" clears the
+  status and can scan the library. Limits: 2 updates a second per title, 60
+  a minute per hook.
+- **API keys** (`kn_live_...`, sent as `Authorization: Bearer`) let scripts
+  read the library, start scans (`POST /api/v1/libraries/{id}/scan?path=` for
+  one folder), send statuses (`POST /api/v1/status`), read what's playing,
+  and manage webhooks, each only with its scope. Keys never reach accounts,
+  library settings or server settings. A "local" key only works from the
+  home network, not through remote access. Only a hash of each key is kept.
+
 ## Tests
 
 ```sh

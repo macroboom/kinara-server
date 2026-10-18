@@ -75,6 +75,20 @@ pub struct Status {
     /// Open tunnelled TCP connections across all peers.
     pub active_streams: u64,
     pub peers: Vec<PeerStatus>,
+    /// When a device last used a direct path, by family. This is what
+    /// actually happened, so it outranks the network report's UDP probes
+    /// (which only ask the relay servers and can fail on their own).
+    #[serde(default)]
+    pub direct_seen: DirectSeen,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectSeen {
+    /// Seconds since a device was last seen on a direct IPv4 path.
+    pub v4_secs_ago: Option<u64>,
+    /// Seconds since a device was last seen on a direct IPv6 path.
+    pub v6_secs_ago: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

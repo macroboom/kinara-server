@@ -55,10 +55,18 @@ type Sidecar struct {
 	Blocked func(ctx context.Context) ([]string, error)
 	// Allowed says whether it may run now (false until an admin exists).
 	Allowed func(ctx context.Context) bool
-	// RelayURLs are self-hosted iroh relays to use instead of n0's public
-	// ones (nil or empty: the public ones). Read at each launch.
-	RelayURLs func() []string
-	Log       *slog.Logger
+	Log     *slog.Logger
+
+	// relayURLs gives the self-hosted iroh relays to use instead of the
+	// public ones (nil or empty: the public ones). Set with SetRelays; read
+	// at each launch.
+	relayURLs func() []string
+	// launchedRelays are the relays the running process was started with.
+	launchedRelays string
+	// offRelay counts status reports in a row from a relay that isn't ours;
+	// lastHeal is when that last made us restart.
+	offRelay int
+	lastHeal time.Time
 
 	mu       sync.Mutex
 	enabled  bool
@@ -127,6 +135,98 @@ func (s *Sidecar) Configure(enabled bool, udpPort int) {
 	}
 	s.mu.Unlock()
 	s.poke()
+}
+
+// SetRelays sets where the relay list comes from (safe while it runs).
+func (s *Sidecar) SetRelays(f func() []string) {
+	s.mu.Lock()
+	s.relayURLs = f
+	s.mu.Unlock()
+}
+
+// wantedRelays is the relay list to launch with, joined ("" for the public ones).
+func (s *Sidecar) wantedRelays() string {
+	s.mu.Lock()
+	f := s.relayURLs
+	s.mu.Unlock()
+	if f == nil {
+		return ""
+	}
+	return strings.Join(f(), ",")
+}
+
+// Reload restarts a running sidecar so it picks up settings it only reads
+// when it starts (the relays to use). It does nothing when the running one
+// already has them, so calling it whenever something might have changed is
+// cheap.
+func (s *Sidecar) Reload() {
+	s.init()
+	want := s.wantedRelays()
+	s.mu.Lock()
+	if s.enabled && s.stop != nil && s.launchedRelays != want {
+		s.Log.Info("remote access: restarting kinora-iroh for new relays", "from", relayLabel(s.launchedRelays), "to", relayLabel(want))
+		s.restarts = 0
+		s.stop()
+	}
+	s.mu.Unlock()
+	s.poke()
+}
+
+func relayLabel(joined string) string {
+	if joined == "" {
+		return "public relays"
+	}
+	return joined
+}
+
+// How many status reports in a row from someone else's relay before
+// restarting onto ours, and how often that may happen at most.
+const (
+	offRelayReports = 3
+	healEvery       = 5 * time.Minute
+)
+
+// checkRelay restarts the sidecar when it reports a relay that isn't one of
+// ours (it can only have been started without our list). Called with s.mu
+// held; reports whether to restart.
+func (s *Sidecar) checkRelay(st *Status) bool {
+	if s.relayURLs == nil || st.Relay.URL == nil || *st.Relay.URL == "" {
+		s.offRelay = 0
+		return false
+	}
+	want := s.relayURLs()
+	if len(want) == 0 {
+		s.offRelay = 0
+		return false
+	}
+	got := relayKey(*st.Relay.URL)
+	for _, u := range want {
+		if relayKey(u) == got {
+			s.offRelay = 0
+			return false
+		}
+	}
+	s.offRelay++
+	if s.offRelay < offRelayReports || time.Since(s.lastHeal) < healEvery {
+		return false
+	}
+	s.offRelay, s.lastHeal = 0, time.Now()
+	s.launchedRelays = "?" // whatever it was started with, it's wrong
+	return true
+}
+
+// relayKey is a relay URL reduced to host and port, so "https://a:8443/" and
+// "https://a:8443" match.
+func relayKey(u string) string {
+	k := strings.ToLower(strings.TrimSpace(u))
+	k = strings.TrimPrefix(strings.TrimPrefix(k, "https://"), "http://")
+	k = strings.TrimSuffix(k, "/")
+	host, port := k, "443"
+	if i := strings.LastIndex(k, ":"); i >= 0 {
+		host, port = k[:i], k[i+1:]
+	}
+	// iroh writes names fully qualified ("relay.example.com.").
+	return strings.TrimSuffix(host, ".") + ":" + port
 }
 
 // Info returns the current state.
@@ -300,10 +400,9 @@ func (s *Sidecar) runOnce(ctx context.Context, bin string, port int) (time.Durat
 	}
 	cmd := exec.Command(bin, args...)
 	cmd.Env = append(os.Environ(), "KINORA_IROH_SECRET="+s.Secret)
-	if s.RelayURLs != nil {
-		if urls := s.RelayURLs(); len(urls) > 0 {
-			cmd.Env = append(cmd.Env, "KINORA_IROH_RELAY_MODE=custom", "KINORA_IROH_RELAY_URLS="+strings.Join(urls, ","))
-		}
+	relays := s.wantedRelays()
+	if relays != "" {
+		cmd.Env = append(cmd.Env, "KINORA_IROH_RELAY_MODE=custom", "KINORA_IROH_RELAY_URLS="+relays)
 	}
 	hideWindow(cmd)
 	stdin, err := cmd.StdinPipe()
@@ -326,8 +425,9 @@ func (s *Sidecar) runOnce(ctx context.Context, bin string, port int) (time.Durat
 	runCtx, stop := context.WithCancel(ctx)
 	s.mu.Lock()
 	s.stdin, s.stop, s.started, s.status = stdin, stop, start, nil
+	s.launchedRelays, s.offRelay = relays, 0
 	s.mu.Unlock()
-	s.Log.Info("remote access: started kinora-iroh", "pid", cmd.Process.Pid, "udpPort", port, "blocked", len(blocked))
+	s.Log.Info("remote access: started kinora-iroh", "pid", cmd.Process.Pid, "udpPort", port, "blocked", len(blocked), "relays", relayLabel(relays))
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -416,7 +516,13 @@ func (s *Sidecar) readEvents(r io.Reader) {
 			if st.Ticket != "" {
 				s.ticket = st.Ticket
 			}
+			heal := s.checkRelay(&st)
 			s.mu.Unlock()
+			if heal {
+				s.Log.Warn("remote access: kinora-iroh is on a relay that isn't ours; restarting it", "relay", *st.Relay.URL)
+				s.note("relay_switched_back", "Remote access was using a public relay instead of yours. It was restarted on your relay.")
+				s.Reload()
+			}
 		case "error":
 			s.note(ev.Code, ev.Message)
 			s.Log.Warn("remote access", "code", ev.Code, "message", ev.Message)

@@ -27,6 +27,9 @@ type VersionView struct {
 	TrickplayURL string `json:"trickplayUrl,omitempty"`
 	// Intro is where the opening titles are, when they were found.
 	Intro *store.Intro `json:"intro,omitempty"`
+	// EndCredits is where the end credits are, when they were found:
+	// players offer the next episode from their start.
+	EndCredits *store.EndCredits `json:"endCredits,omitempty"`
 }
 
 func imageURL(id, kind string) string { return "/api/v1/images/" + id + "/" + kind }
@@ -86,6 +89,9 @@ func (s *Server) versionViews(ctx context.Context, itemID string) ([]VersionView
 		}
 		if in, err := s.Store.IntroFor(ctx, v.ID); err == nil {
 			vv.Intro = in
+		}
+		if c, err := s.Store.EndCreditsFor(ctx, v.ID); err == nil {
+			vv.EndCredits = c
 		}
 		out = append(out, vv)
 	}

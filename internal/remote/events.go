@@ -27,6 +27,16 @@ type Status struct {
 	Blocked     []string    `json:"blocked"`
 	ActiveConns int64       `json:"activeStreams"`
 	Peers       []PeerState `json:"peers"`
+	// DirectSeen says when a device last used a direct path, by family.
+	// Absent from sidecars older than this field.
+	DirectSeen *DirectSeen `json:"directSeen,omitempty"`
+}
+
+// DirectSeen is how long ago a device was last on a direct IPv4 or IPv6
+// path (nil: not since the sidecar started).
+type DirectSeen struct {
+	V4SecsAgo *int64 `json:"v4SecsAgo"`
+	V6SecsAgo *int64 `json:"v6SecsAgo"`
 }
 
 type RelayInfo struct {

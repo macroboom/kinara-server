@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"kinora/internal/images"
+	"kinora/internal/pgs"
 	"kinora/internal/store"
 	"kinora/internal/tmdb"
 	"kinora/internal/transcode"
@@ -59,6 +60,9 @@ func (s *Server) transcodeStream(w http.ResponseWriter, r *http.Request, u store
 	// fails at once can still send an error.
 	fw := &firstWrite{w: w}
 	err = s.Transcoder.Stream(r.Context(), fw, req)
+	if err != nil && !errors.Is(err, transcode.ErrBusy) {
+		s.noteConversionFailed(r, u, v, err, "stream")
+	}
 	switch {
 	case err == nil:
 	case !fw.started:
@@ -276,7 +280,13 @@ type trendingView struct {
 	PosterURL   string    `json:"posterUrl,omitempty"`
 	BackdropURL string    `json:"backdropUrl,omitempty"`
 	Item        *ItemView `json:"item,omitempty"`
-	Rank        int       `json:"rank"`
+	// Request is an open request for the title (requests.go).
+	Request *requestMarker `json:"request,omitempty"`
+	// OnTheWay is the title's status from the owner's tools while it's on its
+	// way (integrations_status.go).
+	OnTheWay *titleStatusView `json:"onTheWay,omitempty"`
+	// Rank is the place in a trending list (left out on discover lists).
+	Rank int `json:"rank,omitempty"`
 }
 
 type trendingCache struct {
@@ -421,6 +431,7 @@ func (s *Server) trendingHandler(w http.ResponseWriter, r *http.Request, u store
 		return out
 	}
 	tm, ts, tt := convert(movies), convert(shows), convert(today)
+	s.markRequests(r.Context(), u, tm, ts, tt)
 	// "In your library": owned titles in order of how much they're trending.
 	inLib := []trendingView{}
 	seen := map[string]bool{}
@@ -559,6 +570,9 @@ func (s *Server) hlsStart(w http.ResponseWriter, r *http.Request, u store.User) 
 	req.Owner = s.streamOwner(r, v)
 	// HLS.Start tries the slower ways itself when the graphics card fails.
 	id, err := s.HLS.Start(r.Context(), req)
+	if err != nil && !errors.Is(err, transcode.ErrBusy) {
+		s.noteConversionFailed(r, u, v, err, "hls")
+	}
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, transcode.ErrBusy) {
@@ -571,6 +585,8 @@ func (s *Server) hlsStart(w http.ResponseWriter, r *http.Request, u store.User) 
 		"session":  id,
 		"playlist": "/api/v1/hls/session/" + id + "/index.m3u8",
 		"start":    req.Start,
+		// Where a Chromecast on the home network can fetch it (see cast.go).
+		"lan": s.lanBases(),
 	})
 }
 
@@ -683,8 +699,8 @@ func (s *Server) subtitleTrack(w http.ResponseWriter, r *http.Request) (store.Ve
 	return v, store.Stream{}, false
 }
 
-// subtitlePGS answers a Blu-ray picture subtitle track as a timeline of PNGs
-// for the app to draw over the video. The first request starts reading the
+// subtitlePGS answers a picture subtitle track (Blu-ray PGS, DVD or DVB) as
+// a timeline of PNGs for the app to draw over the video. The first request starts reading the
 // track; until it's all read, done is false and the app asks again with
 // ?from= set to the events it already has.
 func (s *Server) subtitlePGS(w http.ResponseWriter, r *http.Request, u store.User) {
@@ -696,12 +712,12 @@ func (s *Server) subtitlePGS(w http.ResponseWriter, r *http.Request, u store.Use
 	if !ok {
 		return
 	}
-	if st.Codec != "hdmv_pgs_subtitle" {
-		writeErr(w, http.StatusUnprocessableEntity, "that track isn't Blu-ray (PGS) subtitles")
+	if !pgs.Codecs[st.Codec] {
+		writeErr(w, http.StatusUnprocessableEntity, "that track isn't picture subtitles (Blu-ray, DVD or DVB)")
 		return
 	}
 	from, _ := strconv.Atoi(r.URL.Query().Get("from"))
-	tl, err := s.PGS.Timeline(v.ID, v.Path, v.Mtime, st.Index, from)
+	tl, err := s.PGS.Timeline(v.ID, v.Path, v.Mtime, st.Index, st.Codec, from)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

@@ -3,6 +3,7 @@ package transcode
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -59,12 +60,12 @@ func TestArgsEncodeHDR(t *testing.T) {
 	if !has(a, "-c:v", "h264_nvenc") || !has(a, "-b:v", "3600k", "-maxrate", "4000k") || !has(a, "-map", "0:a:0?") {
 		t.Errorf("args %v", a)
 	}
-	vf := a[indexOf(a, "-vf")+1]
-	if !strings.Contains(vf, "min(ih,720)") || !strings.Contains(vf, "tonemap") {
+	vf := videoFilterArg(a)
+	if !strings.Contains(vf, fit(720)) || !strings.Contains(vf, "tonemap") {
 		t.Errorf("filter %q", vf)
 	}
 	a = Args(r, ffmpeg.Caps{Found: true, H264Encoder: "libx264"})
-	vf = a[indexOf(a, "-vf")+1]
+	vf = videoFilterArg(a)
 	if strings.Contains(vf, "tonemap") || !strings.Contains(vf, "format=yuv420p") {
 		t.Errorf("without zscale: filter %q", vf)
 	}
@@ -276,15 +277,15 @@ func TestArgsMP4AndFilters(t *testing.T) {
 	// libplacebo scales and tone maps in one GPU step; zscale keeps the CPU scale first.
 	hdr := Request{Video: "h264", HDR: "dolby_vision", MaxHeight: 720}
 	vf := videoFilter(hdr, ffmpeg.Caps{Placebo: true, ToneMap: true})
-	if !strings.HasPrefix(vf, "libplacebo=w=-2:h='min(ih,720)':") || strings.Contains(vf, "scale=") || strings.Count(vf, "libplacebo") != 1 {
+	if !strings.HasPrefix(vf, "libplacebo="+fit(720)+":") || strings.Contains(vf, "scale=") || strings.Count(vf, "libplacebo") != 1 {
 		t.Errorf("placebo filter: %s", vf)
 	}
 	vf = videoFilter(hdr, ffmpeg.Caps{ToneMap: true})
-	if !strings.HasPrefix(vf, "scale=-2:'min(ih,720)',zscale") {
+	if !strings.HasPrefix(vf, "scale="+fit(720)+",zscale") {
 		t.Errorf("zscale filter: %s", vf)
 	}
 	vf = videoFilter(Request{Video: "h264"}, ffmpeg.Caps{Placebo: true})
-	if vf != "scale=-2:'min(ih,1080)',format=yuv420p" {
+	if vf != "scale="+fit(1080)+",format=yuv420p" {
 		t.Errorf("sdr filter: %s", vf)
 	}
 }
@@ -318,5 +319,73 @@ func TestStreamMP4Real(t *testing.T) {
 	got := string(probe)
 	if !strings.Contains(got, "h264") || !strings.Contains(got, "aac") || !strings.Contains(got, "mp4") {
 		t.Errorf("probe = %q", got)
+	}
+}
+
+// videoFilterArg is the video filter in ffmpeg arguments: after -vf, or
+// inside -filter_complex "[0:v:0]...[v]" (HDR conversions).
+func videoFilterArg(a []string) string {
+	if i := indexOf(a, "-vf"); i >= 0 {
+		return a[i+1]
+	}
+	if i := indexOf(a, "-filter_complex"); i >= 0 {
+		return strings.TrimSuffix(strings.TrimPrefix(a[i+1], "[0:v:0]"), "[v]")
+	}
+	return ""
+}
+
+func TestHDRConversionDropsSourceStreamLabels(t *testing.T) {
+	caps := ffmpeg.Caps{Found: true, H264Encoder: "h264_nvenc", HW: ffmpeg.HWNVENC, CUDA: true, Placebo: true}
+	r := Request{Path: "x.mp4", Video: "h264", AudioCodec: "aac", Container: "hls", Segments: "ts", OutDir: "out",
+		HDR: "dolby_vision", SourceCodec: "hevc", MaxHeight: 1080, MaxBitrate: 9000}
+	a := Args(r, caps)
+	if indexOf(a, "-vf") >= 0 || indexOf(a, "-filter_complex") < 0 {
+		t.Fatalf("HDR conversion should build its video in a filter graph: %v", a)
+	}
+	if a[indexOf(a, "-filter_complex")+2] != "-map" || a[indexOf(a, "-filter_complex")+3] != "[v]" {
+		t.Fatalf("the filter graph's output is the video stream: %v", a)
+	}
+	if !strings.Contains(videoFilterArg(a), "libplacebo") {
+		t.Fatalf("filter: %s", videoFilterArg(a))
+	}
+	// SDR keeps the plain -vf form.
+	r.HDR = ""
+	a = Args(r, caps)
+	if indexOf(a, "-filter_complex") >= 0 || indexOf(a, "-map") < 0 || a[indexOf(a, "-map")+1] != "0:v:0" {
+		t.Fatalf("SDR: %v", a)
+	}
+}
+
+// fit is the w= and h= of a scale that fits a picture in a height's 16:9 box.
+func fit(height int) string {
+	w, h := ffmpeg.Fit(height)
+	return "w=" + w + ":h=" + h
+}
+
+// Widescreen 4K comes down to fit 1920x1080, not 2592x1080: a 1080p player
+// can't decode H.264 wider than 1920 (a Roku fetches it and never starts).
+func TestFitKeepsWidescreenInsideTheBox(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("no ffmpeg")
+	}
+	cases := []struct{ inW, inH, limit, wantW, wantH int }{
+		{3840, 1600, 1080, 1920, 800},
+		{3840, 2160, 1080, 1920, 1080},
+		{1920, 1080, 1080, 1920, 1080},
+		{1280, 720, 1080, 1280, 720}, // never enlarged
+		{640, 360, 240, 426, 240},
+		{1440, 1080, 720, 960, 720}, // 4:3 keeps its height
+	}
+	for _, c := range cases {
+		w, h := ffmpeg.Fit(c.limit)
+		out, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+			"-i", fmt.Sprintf("color=size=%dx%d:duration=0.1", c.inW, c.inH),
+			"-vf", "scale=w="+w+":h="+h, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(out); got != c.wantW*c.wantH {
+			t.Errorf("%dx%d at %d: got %d pixels, want %dx%d", c.inW, c.inH, c.limit, got, c.wantW, c.wantH)
+		}
 	}
 }

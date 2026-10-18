@@ -177,18 +177,33 @@ type Intro struct {
 	End   float64 `json:"end"`
 }
 
-// IntroCandidate is an episode file in a season, for intro detection.
+// EndCredits is where an episode's end credits are, in seconds. Source
+// says how they were found: "audio" or "picture". (Credits are the cast.)
+type EndCredits struct {
+	Start  float64 `json:"start"`
+	End    float64 `json:"end"`
+	Source string  `json:"source,omitempty"`
+}
+
+// IntroCandidate is an episode file in a season, for intro and credits
+// detection.
 type IntroCandidate struct {
 	VersionID string
 	Path      string
 	Mtime     int64
 	Episode   int
-	// Checked is true when the file was already checked at this mtime.
+	// Duration is the file's length in seconds (0 when unknown).
+	Duration float64
+	// Checked is true when the file was already checked for an intro at
+	// this mtime.
 	Checked bool
+	// CreditsChecked is the same for end credits.
+	CreditsChecked bool
 }
 
 // SeasonsNeedingIntros lists season IDs with at least one episode file not
-// yet checked for an intro (or replaced since), and at least two episodes.
+// yet checked for an intro or end credits (or replaced since), and at least
+// two episodes.
 func (s *Store) SeasonsNeedingIntros(ctx context.Context, limit int) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT sn.id FROM items sn
 		WHERE sn.kind = 'season'
@@ -196,8 +211,10 @@ func (s *Store) SeasonsNeedingIntros(ctx context.Context, limit int) ([]string, 
 			WHERE e.parent_id = sn.id AND v.missing = 0) >= 2
 		AND EXISTS (SELECT 1 FROM items e JOIN versions v ON v.item_id = e.id
 			LEFT JOIN intros n ON n.version_id = v.id
+			LEFT JOIN end_credits c ON c.version_id = v.id
 			WHERE e.parent_id = sn.id AND v.missing = 0 AND v.probe_error = '' AND v.part <= 1
-			AND (n.version_id IS NULL OR n.file_mtime != v.mtime))
+			AND (n.version_id IS NULL OR n.file_mtime != v.mtime
+				OR c.version_id IS NULL OR c.file_mtime != v.mtime))
 		ORDER BY sn.parent_id, sn.season_number
 		LIMIT ?`, limit)
 	if err != nil {
@@ -218,10 +235,12 @@ func (s *Store) SeasonsNeedingIntros(ctx context.Context, limit int) ([]string, 
 // SeasonIntroFiles lists a season's episode files in episode order (first
 // part of each episode only).
 func (s *Store) SeasonIntroFiles(ctx context.Context, seasonID string) ([]IntroCandidate, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT v.id, v.path, v.mtime, e.episode_number,
-		CASE WHEN n.version_id IS NOT NULL AND n.file_mtime = v.mtime THEN 1 ELSE 0 END
+	rows, err := s.db.QueryContext(ctx, `SELECT v.id, v.path, v.mtime, e.episode_number, v.duration_sec,
+		CASE WHEN n.version_id IS NOT NULL AND n.file_mtime = v.mtime THEN 1 ELSE 0 END,
+		CASE WHEN c.version_id IS NOT NULL AND c.file_mtime = v.mtime THEN 1 ELSE 0 END
 		FROM items e JOIN versions v ON v.item_id = e.id
 		LEFT JOIN intros n ON n.version_id = v.id
+		LEFT JOIN end_credits c ON c.version_id = v.id
 		WHERE e.parent_id = ? AND e.kind = 'episode' AND v.missing = 0 AND v.probe_error = '' AND v.part <= 1
 		ORDER BY e.episode_number, v.height DESC`, seasonID)
 	if err != nil {
@@ -231,7 +250,7 @@ func (s *Store) SeasonIntroFiles(ctx context.Context, seasonID string) ([]IntroC
 	var out []IntroCandidate
 	for rows.Next() {
 		var c IntroCandidate
-		if err := rows.Scan(&c.VersionID, &c.Path, &c.Mtime, &c.Episode, &c.Checked); err != nil {
+		if err := rows.Scan(&c.VersionID, &c.Path, &c.Mtime, &c.Episode, &c.Duration, &c.Checked, &c.CreditsChecked); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -265,6 +284,34 @@ func (s *Store) IntroFor(ctx context.Context, versionID string) (*Intro, error) 
 		return nil, err
 	}
 	return &in, nil
+}
+
+// SetEndCredits records end credits for a file (zero end means none were
+// found).
+func (s *Store) SetEndCredits(ctx context.Context, versionID string, c EndCredits, fileMtime int64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO end_credits (version_id, start_sec, end_sec, source, file_mtime, detected_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (version_id) DO UPDATE SET start_sec = excluded.start_sec, end_sec = excluded.end_sec,
+			source = excluded.source, file_mtime = excluded.file_mtime, detected_at = excluded.detected_at`,
+		versionID, c.Start, c.End, c.Source, fileMtime, now())
+	return err
+}
+
+// EndCreditsFor returns a file's end credits, or nil when there are none
+// (or it hasn't been checked).
+func (s *Store) EndCreditsFor(ctx context.Context, versionID string) (*EndCredits, error) {
+	var c EndCredits
+	err := s.db.QueryRowContext(ctx, `SELECT c.start_sec, c.end_sec, c.source FROM end_credits c
+		JOIN versions v ON v.id = c.version_id
+		WHERE c.version_id = ? AND c.end_sec > 0 AND c.file_mtime = v.mtime`,
+		versionID).Scan(&c.Start, &c.End, &c.Source)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
 }
 
 // AllVersions lists every available, readable file (for background work

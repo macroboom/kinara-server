@@ -58,3 +58,16 @@ func TestLoadDotEnv(t *testing.T) {
 		t.Errorf("missing file should be fine: %v", err)
 	}
 }
+
+func TestLoadDotEnvSkipsBOM(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kinara.env")
+	os.WriteFile(path, []byte("\uFEFFKINORA_TEST_BOM=C:\\Données\\Kinara\n"), 0o600)
+	t.Setenv("KINORA_TEST_BOM", "")
+	os.Unsetenv("KINORA_TEST_BOM")
+	if err := loadDotEnv(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("KINORA_TEST_BOM"); got != `C:\Données\Kinara` {
+		t.Errorf("got %q", got)
+	}
+}

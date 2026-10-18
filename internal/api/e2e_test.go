@@ -278,6 +278,33 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("next up: %+v", showDetail.NextUp)
 	}
 
+	// Reaching the end credits counts as watched, even short of 92%; the
+	// player gets where they are.
+	var ep2 struct{ Versions []VersionView }
+	c.do("GET", "/items/"+episodes.Items[1].ID, nil, &ep2)
+	if len(ep2.Versions) == 0 || ep2.Versions[0].DurationSec <= 0 || ep2.Versions[0].EndCredits != nil {
+		t.Fatalf("episode 2 versions: %+v", ep2.Versions)
+	}
+	v2 := ep2.Versions[0]
+	credits := store.EndCredits{Start: v2.DurationSec * 0.6, End: v2.DurationSec, Source: "audio"}
+	if err := st.SetEndCredits(ctx, v2.ID, credits, v2.Mtime); err != nil {
+		t.Fatal(err)
+	}
+	c.do("GET", "/items/"+episodes.Items[1].ID, nil, &ep2)
+	if ep2.Versions[0].EndCredits == nil || ep2.Versions[0].EndCredits.Start != credits.Start {
+		t.Fatalf("end credits not shown: %+v", ep2.Versions[0].EndCredits)
+	}
+	c.do("PUT", "/progress/"+episodes.Items[1].ID, map[string]any{"positionSec": v2.DurationSec * 0.5, "versionId": v2.ID}, &ws)
+	if ws.Completed {
+		t.Fatalf("before the credits is not watched: %+v", ws)
+	}
+	c.do("PUT", "/progress/"+episodes.Items[1].ID, map[string]any{"positionSec": v2.DurationSec * 0.65, "versionId": v2.ID}, &ws)
+	if !ws.Completed {
+		t.Fatalf("in the credits should be watched: %+v", ws)
+	}
+	// Back to unwatched for the rest of the test.
+	c.do("POST", "/items/"+episodes.Items[1].ID+"/watched", map[string]any{"watched": false}, nil)
+
 	// Cast is fetched during the scan; track choices stick to the show.
 	var castDetail struct {
 		Cast       []castView

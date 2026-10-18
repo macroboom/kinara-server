@@ -143,7 +143,8 @@ func planVideo(r Request, caps ffmpeg.Caps) videoPlan {
 			if stage == StageGPU {
 				if sdr {
 					p.input = append(p.input, "-hwaccel", "d3d11va", "-hwaccel_output_format", "d3d11", "-noautorotate")
-					p.vf = fmt.Sprintf("hwmap=derive_device=qsv,format=qsv,scale_qsv=w=-2:h='min(ih,%d)':format=nv12", height)
+					fw, fh := ffmpeg.Fit(height)
+					p.vf = fmt.Sprintf("hwmap=derive_device=qsv,format=qsv,scale_qsv=w=%s:h=%s:format=nv12", fw, fh)
 				} else {
 					// HDR is tone mapped on the CPU; decoding stays on the card.
 					p.input = append(p.input, "-hwaccel", "d3d11va")
@@ -155,7 +156,8 @@ func planVideo(r Request, caps ffmpeg.Caps) videoPlan {
 		if stage == StageGPU {
 			if sdr {
 				p.input = append(p.input, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-noautorotate")
-				p.vf = fmt.Sprintf("scale_vaapi=w=-2:h='min(ih,%d)':format=nv12,hwmap=derive_device=qsv,format=qsv", height)
+				fw, fh := ffmpeg.Fit(height)
+				p.vf = fmt.Sprintf("scale_vaapi=w=%s:h=%s:format=nv12,hwmap=derive_device=qsv,format=qsv", fw, fh)
 			} else {
 				p.input = append(p.input, "-hwaccel", "vaapi")
 			}
@@ -173,7 +175,8 @@ func planVideo(r Request, caps ffmpeg.Caps) videoPlan {
 		if stage == StageGPU {
 			if sdr {
 				p.input = append(p.input, "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi", "-noautorotate")
-				p.vf = fmt.Sprintf("scale_vaapi=w=-2:h='min(ih,%d)':format=nv12", height)
+				fw, fh := ffmpeg.Fit(height)
+				p.vf = fmt.Sprintf("scale_vaapi=w=%s:h=%s:format=nv12", fw, fh)
 			} else {
 				p.input = append(p.input, "-hwaccel", "vaapi")
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -70,5 +71,30 @@ func TestStatusError(t *testing.T) {
 	se, ok := err.(*StatusError)
 	if !ok || se.Code != 401 {
 		t.Fatalf("want 401 StatusError, got %v", err)
+	}
+}
+
+func TestRecommendationsFallsBackToSimilar(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/recommendations") {
+			w.Write([]byte(`{"page":1,"total_pages":1,"results":[]}`))
+			return
+		}
+		w.Write([]byte(`{"page":1,"total_pages":3,"results":[{"id":7,"name":"Alike"}]}`))
+	}))
+	defer srv.Close()
+	c := New("k")
+	c.BaseURL = srv.URL
+	p, err := c.Recommendations(context.Background(), "tv", 42, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 2 || asked[0] != "/tv/42/recommendations" || asked[1] != "/tv/42/similar" {
+		t.Fatalf("asked %v", asked)
+	}
+	if len(p.Results) != 1 || p.Results[0].MediaType != "tv" || p.Results[0].ID != 7 {
+		t.Fatalf("results %+v", p.Results)
 	}
 }

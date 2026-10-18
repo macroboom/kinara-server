@@ -19,7 +19,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::events::{
-    AddrInfo, ErrorLine, Event, NetReportInfo, PeerChange, PeerStatus, Ready, RelayInfo, Status, Warning, VERSION,
+    AddrInfo, DirectSeen, ErrorLine, Event, NetReportInfo, PeerChange, PeerStatus, Ready, RelayInfo, Status, Warning,
+    VERSION,
 };
 use crate::path::{self, PathType};
 use crate::pump::{self, Counters, StreamGuard};
@@ -32,6 +33,9 @@ const TARGET_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const TARGET_WARNING_TTL: Duration = Duration::from_secs(60);
 /// Grace before "no relay" is reported, so a normal startup is not flagged.
 const RELAY_WARNING_AFTER: Duration = Duration::from_secs(20);
+/// A direct path seen this recently proves UDP works, whatever the network
+/// report's probes say.
+const DIRECT_SEEN_FRESH: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -119,6 +123,8 @@ struct Inner {
     shutting_down: AtomicBool,
     mdns_error: Option<String>,
     target_failure: Mutex<Option<(Instant, String)>>,
+    /// Last time any device was on a direct IPv4 / IPv6 path.
+    direct_seen: Mutex<(Option<Instant>, Option<Instant>)>,
     local_v4: Option<SocketAddr>,
     local_v6: Option<SocketAddr>,
     secret: Option<String>,
@@ -180,6 +186,7 @@ impl Server {
             shutting_down: AtomicBool::new(false),
             mdns_error,
             target_failure: Mutex::new(None),
+            direct_seen: Mutex::new((None, None)),
             local_v4,
             local_v6,
             secret: cfg.secret,
@@ -267,6 +274,7 @@ impl Server {
             map.iter()
                 .map(|(id, p)| {
                     let snap = path::snapshot(&p.conn);
+                    note_direct(inner, snap.kind);
                     PeerStatus {
                         node_id: id.to_string(),
                         path: snap.kind,
@@ -301,6 +309,13 @@ impl Server {
             blocked,
             active_streams: inner.active_streams.load(Ordering::Relaxed),
             peers,
+            direct_seen: {
+                let (v4, v6) = *inner.direct_seen.lock().unwrap_or_else(|e| e.into_inner());
+                DirectSeen {
+                    v4_secs_ago: v4.map(|t| t.elapsed().as_secs()),
+                    v6_secs_ago: v6.map(|t| t.elapsed().as_secs()),
+                }
+            },
         };
         st.warnings = self.warnings(&st);
         st
@@ -314,7 +329,22 @@ impl Server {
         let mut push = |code: &str, message: String| out.push(Warning { code: code.into(), message });
 
         if let Some(nr) = &st.net_report {
-            if !nr.udp {
+            // The report's UDP check only asks the relay servers. With one
+            // relay of our own, that relay not answering looks exactly like
+            // a blocked network, so check what devices really did first.
+            let fresh = |s: Option<u64>| s.is_some_and(|s| s < DIRECT_SEEN_FRESH.as_secs());
+            let direct_lately = fresh(st.direct_seen.v4_secs_ago) || fresh(st.direct_seen.v6_secs_ago);
+            if !nr.udp && direct_lately {
+                // Devices connect directly, so UDP works; the probe was wrong.
+            } else if !nr.udp && matches!(inner.relay, RelayChoice::Custom(_)) && st.relay.connected {
+                let host = st.relay.url.as_deref().map(relay_host).unwrap_or("your relay");
+                push(
+                    "udp_unverified",
+                    format!(
+                        "Couldn't check direct connections: the relay {host} didn't answer the UDP check (UDP port 7842 by default). Devices may still connect directly. If this stays, allow UDP 7842 for IPv4 and IPv6 on the relay server."
+                    ),
+                );
+            } else if !nr.udp {
                 push("udp_blocked", "UDP blocked, relay only. Remote playback will go through the relay.".into());
             } else if nr.mapping_varies_by_dest == Some(true) && !st.addrs.iter().any(|a| a.scope == "global") {
                 push(
@@ -420,6 +450,7 @@ async fn handle_connection(inner: Arc<Inner>, conn: Connection) {
     }
 
     let snap = path::snapshot(&conn);
+    note_direct(&inner, snap.kind);
     info!(peer = %peer, path = snap.kind.as_str(), "peer connected");
     let _ = inner.events.send(Event::PeerConnected(PeerChange {
         v: VERSION,
@@ -524,5 +555,37 @@ async fn target_unreachable(inner: &Inner, err: String, send: &mut SendStream, r
         let _ = send.finish();
         // Drain the request so the client does not see a stop before reading the reply.
         let _ = tokio::time::timeout(Duration::from_secs(2), RecvStream::read_to_end(recv, 1 << 20)).await;
+    }
+}
+
+/// Records that a device is on a direct path right now.
+fn note_direct(inner: &Inner, kind: PathType) {
+    let mut seen = inner.direct_seen.lock().unwrap_or_else(|e| e.into_inner());
+    match kind {
+        PathType::DirectV4 => seen.0 = Some(Instant::now()),
+        PathType::DirectV6 => seen.1 = Some(Instant::now()),
+        _ => {}
+    }
+}
+
+/// "iroh.relay.example.com" from "https://iroh.relay.example.com:8443/".
+fn relay_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let host = rest.split(['/', '?']).next().unwrap_or(rest);
+    if host.starts_with('[') {
+        return host.split_once(']').map_or(host, |(h, _)| &h[1..]);
+    }
+    host.rsplit_once(':').map_or(host, |(h, _)| h)
+}
+
+#[cfg(test)]
+mod reach_tests {
+    use super::relay_host;
+
+    #[test]
+    fn relay_host_strips_scheme_port_and_path() {
+        assert_eq!(relay_host("https://iroh.relay.kinara.media:8443/"), "iroh.relay.kinara.media");
+        assert_eq!(relay_host("https://relay.example.com/"), "relay.example.com");
+        assert_eq!(relay_host("https://[2001:db8::1]:8443/"), "2001:db8::1");
     }
 }
