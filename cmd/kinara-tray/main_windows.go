@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -133,6 +134,7 @@ const (
 	cmdRestart
 	cmdData
 	cmdLogs
+	cmdUninstall
 	cmdQuit
 )
 
@@ -223,6 +225,13 @@ func main() {
 	// --open (Start menu, desktop, end of setup): open Kinara in the browser
 	// once the server answers. It only stays as the tray icon when nothing
 	// else runs the server (sign-in mode with no tray running yet).
+	// --uninstall (Start menu "Remove Kinara"): run the real uninstaller.
+	// Windows hides Start menu shortcuts that point at an uninstaller, so the
+	// visible one points here instead.
+	if len(os.Args) > 1 && os.Args[1] == "--uninstall" {
+		runUninstaller()
+		return
+	}
 	open := len(os.Args) > 1 && os.Args[1] == "--open"
 	name, _ := syscall.UTF16PtrFromString(`Local\KinaraTray`)
 	_, _, err := pCreateMutex.Call(0, 0, uintptr(unsafe.Pointer(name)))
@@ -403,6 +412,8 @@ func showMenu() {
 	add(cmdData, "Open data folder", true)
 	add(cmdLogs, "Open logs", true)
 	sep()
+	add(cmdUninstall, "Uninstall Kinara…", true)
+	sep()
 	if app.mode == "signin" {
 		add(cmdQuit, "Quit Kinara", true)
 	} else {
@@ -431,6 +442,8 @@ func showMenu() {
 		}()
 	case cmdData:
 		shellOpen(app.dataDir)
+	case cmdUninstall:
+		runUninstaller()
 	case cmdLogs:
 		shellOpen(filepath.Join(app.dataDir, "logs"))
 	case cmdQuit:
@@ -440,6 +453,21 @@ func showMenu() {
 }
 
 func openApp() { shellOpen("http://localhost:" + app.port + "/") }
+
+// runUninstaller starts the uninstaller Inno Setup wrote next to the tray
+// (unins000.exe; a higher number if an install was ever repaired). It asks
+// for admin itself and explains what it removes before doing anything.
+func runUninstaller() {
+	found, _ := filepath.Glob(filepath.Join(app.exeDir, "unins*.exe"))
+	if len(found) == 0 {
+		alert("Couldn't find Kinara's uninstaller in " + app.exeDir + ".\n\nUninstall Kinara from Settings > Apps instead.")
+		return
+	}
+	sort.Strings(found)
+	if err := shellRun("open", found[len(found)-1], ""); err != nil {
+		alert("Couldn't start the uninstaller: " + err.Error())
+	}
+}
 
 // openWhenUp waits (up to a minute) for the server to answer, then opens it.
 // If it never does, it says where to look rather than opening an error page.

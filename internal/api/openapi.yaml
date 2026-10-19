@@ -1311,6 +1311,30 @@ paths:
         "403": { description: Sign-up is off }
         "409": { description: Name taken }
 
+  /setup:
+    post:
+      summary: First run only - make the owner account and sign it in
+      description: >
+        Works only while the server has no accounts (health says setupDone false)
+        and only from the home network. Afterwards it answers 409.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, description: "1 to 32 letters, digits, spaces, dots, dashes or underscores" }
+                password: { type: string, description: At least 8 characters }
+                deviceName: { type: string }
+                device: { $ref: "#/components/schemas/DeviceInfo" }
+      responses:
+        "201": { description: The owner, signed in; same shape as /auth/login }
+        "400": { description: Bad name or short password }
+        "403": { description: Not from the home network }
+        "409": { description: Already set up }
+
   /lists:
     get:
       summary: This profile's lists ("My List" first, made on first use) with counts

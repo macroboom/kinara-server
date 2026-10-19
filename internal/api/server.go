@@ -137,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/cloud", s.cloudSignIn)
 	mux.HandleFunc("GET /api/v1/auth/accounts", s.accounts)
 	mux.HandleFunc("POST /api/v1/auth/signup", s.signup)
+	mux.HandleFunc("POST /api/v1/setup", s.setup)
 	mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")
 		w.Write(openapiSpec)
@@ -272,11 +273,17 @@ func tokenFrom(r *http.Request, allowQuery bool) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 	}
+	// A token in the URL (images and video, which can't send headers) is
+	// what the page asked with, so it beats the cookie. The cookie belongs to
+	// the built-in pages and can outlive its session: a reinstall with a
+	// fresh database left a dead one that turned every poster into a 401.
+	if allowQuery {
+		if t := r.URL.Query().Get("token"); t != "" {
+			return t
+		}
+	}
 	if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
 		return c.Value
-	}
-	if allowQuery {
-		return r.URL.Query().Get("token")
 	}
 	return ""
 }

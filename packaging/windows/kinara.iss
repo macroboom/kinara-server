@@ -53,6 +53,8 @@ LicenseFile=..\..\LICENSE
 
 [Messages]
 WelcomeLabel2=This sets up [name/ver], a media server for your movies and shows, on this PC.%n%nNext you'll see everything it installs and every change it makes to Windows, before anything happens. You choose where your data goes and how the server runs.
+ConfirmUninstall=Remove %1 from this PC?%n%nThis removes:%n  - the program files in the Kinara program folder%n  - the "Kinara" Windows service, if there is one%n  - Kinara's firewall rules%n  - the Start menu, desktop and sign-in shortcuts and the tray icon%n  - Kinara's settings under HKLM\Software\Kinara%n%nNext you choose whether to keep your library (database, settings and cache). Your movie and show files are never touched.
+UninstalledAll=%1 was removed from this PC.
 FinishedLabel=Kinara is installed. Open it in your browser to create the owner account and add your movie and show folders.
 
 [Tasks]
@@ -87,8 +89,15 @@ Root: HKLM; Subkey: "Software\Kinara"; ValueType: string; ValueName: "Version"; 
 
 [Icons]
 Name: "{autoprograms}\Kinara\Open Kinara"; Filename: "{app}\kinara-tray.exe"; Parameters: "--open"; IconFilename: "{app}\kinara.ico"; Comment: "Open Kinara in your browser"
-Name: "{autoprograms}\Kinara\Kinara data folder"; Filename: "{code:GetDataDir}"
-Name: "{autoprograms}\Kinara\Kinara logs"; Filename: "{code:GetDataDir}\logs"
+; Folder shortcuts open through Explorer with a fixed folder icon: pointing at the
+; folder itself leaves a blank icon when Windows can't look inside it (the data
+; folder is admins-only in service mode).
+Name: "{autoprograms}\Kinara\Kinara data folder"; Filename: "{win}\explorer.exe"; Parameters: """{code:GetDataDir}"""; IconFilename: "{sys}\shell32.dll"; IconIndex: 3; Comment: "Database, settings (kinara.env) and logs"
+Name: "{autoprograms}\Kinara\Kinara logs"; Filename: "{win}\explorer.exe"; Parameters: """{code:GetDataDir}\logs"""; IconFilename: "{sys}\shell32.dll"; IconIndex: 3; Comment: "The server's log files"
+; Windows hides Start menu shortcuts that look like uninstallers (by name or by
+; pointing at unins000.exe), so this one goes through the tray, which starts
+; the real uninstaller. Settings > Apps uninstalls too.
+Name: "{autoprograms}\Kinara\Remove Kinara"; Filename: "{app}\kinara-tray.exe"; Parameters: "--uninstall"; IconFilename: "{app}\kinara.ico"; Comment: "Remove Kinara from this PC. Asks before touching your library."
 Name: "{commonstartup}\Kinara tray"; Filename: "{app}\kinara-tray.exe"; IconFilename: "{app}\kinara.ico"; Check: WantTrayAtSignIn
 Name: "{autodesktop}\Kinara"; Filename: "{app}\kinara-tray.exe"; Parameters: "--open"; IconFilename: "{app}\kinara.ico"; Comment: "Open Kinara in your browser"; Tasks: desktopicon
 
@@ -114,9 +123,11 @@ var
   DataPage: TInputDirWizardPage;
   ModePage: TInputOptionWizardPage;
   AccountPage: TInputOptionWizardPage;
+  TmdbPage: TInputQueryWizardPage;
   PrevDataDir, PrevCacheDir, PrevMode, PrevAccount: String;
   IsUpgrade: Boolean;
   UninstData, UninstCache: String;
+  DeleteData: Boolean;
 
 // ---------- values the sections above ask for ----------
 
@@ -176,6 +187,51 @@ begin
         if (P > 0) and (P < Length(S)) then Result := Copy(S, P + 1, MaxInt);
       end;
     end;
+end;
+
+// KEY's value in a settings file ('' if it isn't there).
+function EnvValue(const Path, Key: String): String;
+var
+  Lines: TArrayOfString;
+  I: Integer;
+  S: String;
+begin
+  Result := '';
+  if LoadStringsFromFile(Path, Lines) then
+    for I := 0 to GetArrayLength(Lines) - 1 do
+    begin
+      S := Trim(Lines[I]);
+      if Pos(Key + '=', S) = 1 then
+      begin
+        S := Trim(Copy(S, Length(Key) + 2, MaxInt));
+        StringChangeEx(S, '"', '', True);
+        Result := S;
+      end;
+    end;
+end;
+
+// Drop KEY from a settings file, keeping everything else.
+procedure RemoveEnvKey(const Path, Key: String);
+var
+  Lines, Kept: TArrayOfString;
+  I, N: Integer;
+begin
+  if not LoadStringsFromFile(Path, Lines) then exit;
+  N := 0;
+  SetArrayLength(Kept, GetArrayLength(Lines));
+  for I := 0 to GetArrayLength(Lines) - 1 do
+    if Pos(Key + '=', Trim(Lines[I])) <> 1 then
+    begin
+      Kept[N] := Lines[I];
+      N := N + 1;
+    end;
+  SetArrayLength(Kept, N);
+  SaveStringsToUTF8File(Path, Kept, False);
+end;
+
+function OwnTmdbKey: String;
+begin
+  Result := Trim(TmdbPage.Values[0]);
 end;
 
 // ---------- running tools ----------
@@ -239,11 +295,11 @@ begin
     '                       files and convert video for devices that need it.' + #13#10 +
     '  web\                 the Kinara web app, served by the server.' + #13#10 +
     '  kinara.ico, THIRD-PARTY.txt (licenses of bundled software).' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'YOUR DATA, in folders you choose on a later page:' + #13#10 +
     '  Database and settings: your library, users, watch history, kinara.env' + #13#10 +
     '  (settings), logs\. Cache: artwork, converted video, scrub thumbnails.' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'CHANGES TO WINDOWS:' + #13#10 +
     '  - A Windows service named "Kinara" that starts with the PC (only if you' + #13#10 +
     '    pick that mode; you can instead run it only while you''re signed in).' + #13#10 +
@@ -256,7 +312,7 @@ begin
     '    logs\ stays readable by everyone on this PC. Sign-in mode: the data and' + #13#10 +
     '    cache folders are writable by this PC''s users, since the server runs as you.' + #13#10 +
     '  - Start menu shortcuts, and the tray icon at sign-in (optional).' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'NETWORK:' + #13#10 +
     '  - Listens on TCP 8420 for the apps on your network. With remote access' + #13#10 +
     '    on, also TCP 32443 (HTTPS) and one UDP port you choose in settings.' + #13#10 +
@@ -264,14 +320,16 @@ begin
     '    (themoviedb.org) when it scans; and, only if you turn them on, remote' + #13#10 +
     '    access relays and Kinara Cloud sign-in.' + #13#10 +
     '  - No ads, no tracking, no usage analytics.' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'WHAT IT DOES NOT DO:' + #13#10 +
     '  - No drivers, browser add-ons, bundled offers or scheduled updaters.' + #13#10 +
     '  - It never changes or deletes your media files; it only reads them.' + #13#10 +
-    #13#10 +
-    'UNINSTALLING removes the program, the service, the firewall rules and the' + #13#10 +
-    'shortcuts. It asks before touching your data (kept by default).' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
+    'UNINSTALLING (Start menu > Kinara > Remove Kinara, the tray menu, or' + #13#10 +
+    'Settings > Apps)' + #13#10 +
+    'removes the program, the service, the firewall rules and the shortcuts.' + #13#10 +
+    'It asks before touching your data (kept by default).' + #13#10 +
+    '' + #13#10 +
     'This installer is not code-signed yet, which is why Windows showed a' + #13#10 +
     '"Windows protected your PC" or "unknown publisher" warning. It comes from' + #13#10 +
     'Macroboom LLC via kinara.media.';
@@ -341,6 +399,19 @@ begin
   AccountPage.Add('Local System (recommended): can read all your media folders');
   AccountPage.Add('Network Service: more restricted');
   if PrevAccount = 'NetworkService' then AccountPage.SelectedValueIndex := 1 else AccountPage.SelectedValueIndex := 0;
+
+  // 5. Optional: your own TMDB key instead of the built-in one.
+  TmdbPage := CreateInputQueryPage(AccountPage.ID,
+    'Posters and descriptions',
+    'Optional: use your own TMDB key.',
+    'Kinara gets artwork, descriptions and cast from TMDB (themoviedb.org) using a ' +
+    'key built into Kinara, so there''s nothing to set up here.' + #13#10#13#10 +
+    'If you have your own TMDB API key or read access token, you can use it instead ' +
+    '(it''s saved in kinara.env in your data folder). Leave the box empty to use the ' +
+    'built-in key.');
+  TmdbPage.Add('Your TMDB key (optional):', False);
+  if IsUpgrade and (PrevDataDir <> '') then
+    TmdbPage.Values[0] := EnvValue(PrevDataDir + '\kinara.env', 'KINORA_TMDB_KEY');
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -368,6 +439,12 @@ var
   FreeMB, TotalMB: Cardinal;
 begin
   Result := True;
+  if (CurPageID = TmdbPage.ID) and (Pos(' ', OwnTmdbKey) > 0) then
+  begin
+    MsgBox('A TMDB key has no spaces in it. Paste just the key, or leave the box empty.', mbError, MB_OK);
+    Result := False;
+    exit;
+  end;
   if CurPageID = DataPage.ID then
   begin
     D := GetDataDir('');
@@ -436,12 +513,17 @@ begin
       S := S + Space + 'Signed-in users can start and stop it from the tray.' + NewLine;
   end else
     S := S + 'Runs as:' + NewLine + Space + 'You, only while you''re signed in (started by the tray icon).' + NewLine;
+  S := S + NewLine + 'Posters and descriptions:' + NewLine + Space;
+  if OwnTmdbKey <> '' then
+    S := S + 'From TMDB, with your own key (ending ...' + Copy(OwnTmdbKey, Length(OwnTmdbKey) - 3, 4) + ')' + NewLine
+  else
+    S := S + 'From TMDB, with Kinara''s built-in key' + NewLine;
   S := S + NewLine + 'Network:' + NewLine + Space + 'Listens on port ' + GetPort('') + ' (TCP).' + NewLine;
   if WizardIsTaskSelected('firewall') then
     S := S + Space + 'Firewall: allowed on private and work networks, blocked on public ones.' + NewLine
   else
     S := S + Space + 'Firewall: no changes (other devices may not reach Kinara until you allow it).' + NewLine;
-  S := S + NewLine + 'Shortcuts:' + NewLine + Space + 'Start menu: Open Kinara, Kinara data folder, Kinara logs.' + NewLine;
+  S := S + NewLine + 'Shortcuts:' + NewLine + Space + 'Start menu: Open Kinara, Kinara data folder, Kinara logs, Remove Kinara.' + NewLine;
   if WantTrayAtSignIn then S := S + Space + 'Tray icon at sign-in, for everyone who uses this PC.' + NewLine;
   if WizardIsTaskSelected('desktopicon') then S := S + Space + 'Desktop: Kinara.' + NewLine;
   if IsUpgrade then
@@ -511,6 +593,15 @@ begin
     Keys[0] := 'KINORA_LISTEN'; Values[0] := ':8420';
     SetEnvLines(EnvFile, Keys, Values);
   end;
+  // Your own TMDB key replaces the built-in one; an empty box goes back to it.
+  if OwnTmdbKey <> '' then
+  begin
+    SetArrayLength(Keys, 1);
+    SetArrayLength(Values, 1);
+    Keys[0] := 'KINORA_TMDB_KEY'; Values[0] := OwnTmdbKey;
+    SetEnvLines(EnvFile, Keys, Values);
+  end else
+    RemoveEnvKey(EnvFile, 'KINORA_TMDB_KEY');
 end;
 
 procedure GrantFolder(const Dir, Who: String);
@@ -598,6 +689,31 @@ end;
 
 // ---------- uninstall ----------
 
+// Uninstalling: the uninstaller's own confirmation (ConfirmUninstall, above)
+// lists what goes; then, before anything is removed, one question about the
+// library. Keeping it is the default and is what a silent uninstall does.
+procedure AskAboutData;
+var
+  Labels: TArrayOfString;
+  Where: String;
+begin
+  DeleteData := False;
+  if UninstallSilent or (UninstData = '') or not DirExists(UninstData) then exit;
+  Where := '  Database and settings: ' + UninstData + #13#10;
+  if (UninstCache <> '') and (Pos(Lowercase(UninstData), Lowercase(UninstCache)) <> 1) then
+    Where := Where + '  Cache: ' + UninstCache + #13#10;
+  SetArrayLength(Labels, 2);
+  Labels[0] := 'Keep my library';
+  Labels[1] := 'Delete my library';
+  if TaskDialogMsgBox('Keep your Kinara library?',
+      'Your library, users, watch history and settings are in:' + #13#10 + Where + #13#10 +
+      'Keep them if you might reinstall: everything comes back as it was. ' +
+      'Your movie and show files are not affected either way.',
+      mbConfirmation, MB_YESNO, Labels, 0) = IDNO then
+    DeleteData := MsgBox('Permanently delete the database, settings and cache?' + #13#10#13#10 + Where + #13#10 +
+      'This cannot be undone.', mbError, MB_YESNO or MB_DEFBUTTON2) = IDYES;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
@@ -605,6 +721,7 @@ begin
     // Read these before the registry key goes.
     RegQueryStringValue(HKLM, 'Software\Kinara', 'DataDir', UninstData);
     RegQueryStringValue(HKLM, 'Software\Kinara', 'CacheDir', UninstCache);
+    AskAboutData;
     Run(Sys('taskkill.exe'), '/IM kinara-tray.exe /F');
     RemoveService;
     Sleep(1000);
@@ -612,18 +729,9 @@ begin
     Run(Sys('taskkill.exe'), '/IM kinora-iroh.exe /F');
     RemoveFirewallRules;
   end;
-  if (CurUninstallStep = usPostUninstall) and (UninstData <> '') and not UninstallSilent then
+  if (CurUninstallStep = usPostUninstall) and DeleteData then
   begin
-    if MsgBox('Kinara is removed. Your data is still here:' + #13#10#13#10 +
-        '  Database and settings: ' + UninstData + #13#10 +
-        '  Cache: ' + UninstCache + #13#10#13#10 +
-        'Keep it if you might reinstall: your library, users and watch history ' +
-        'come back as they were. Delete it permanently now?' + #13#10 +
-        '(Your media files are never touched either way.)',
-        mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
-    begin
-      if (UninstCache <> '') and DirExists(UninstCache) then DelTree(UninstCache, True, True, True);
-      if DirExists(UninstData) then DelTree(UninstData, True, True, True);
-    end;
+    if (UninstCache <> '') and DirExists(UninstCache) then DelTree(UninstCache, True, True, True);
+    if DirExists(UninstData) then DelTree(UninstData, True, True, True);
   end;
 end;

@@ -14,7 +14,8 @@
 //	-cache    KINORA_CACHE     cache folder (images, conversions,    DATA/cache
 //	                           preview thumbnails); can grow large
 //	-listen   KINORA_LISTEN    address to listen on                  :8420
-//	-tmdb-key KINORA_TMDB_KEY  TMDB API key or read access token
+//	-tmdb-key KINORA_TMDB_KEY  your own TMDB API key or read access   the key built into release builds
+//	                           token, used instead of the built-in one
 //	-ffprobe  KINORA_FFPROBE   path to ffprobe                       ffmpeg\ffprobe next to the server, else on PATH
 //	-ffmpeg   KINORA_FFMPEG    path to ffmpeg                        next to ffprobe, or on PATH
 //
@@ -129,10 +130,19 @@ func env(key, def string) string {
 	return def
 }
 
+// builtinTMDBKey is Kinara's own TMDB key, so posters and descriptions work
+// without anyone signing up for one. It's set when release builds are made,
+//
+//	go build -ldflags "-X main.builtinTMDBKey=<key>" ./cmd/kinora-server
+//
+// and empty in the source, so the key never lands in the repository.
+// KINORA_TMDB_KEY (or -tmdb-key) replaces it with your own.
+var builtinTMDBKey string
+
 func commonFlags(fs *flag.FlagSet, c *config) {
 	fs.StringVar(&c.dataDir, "data", env("KINORA_DATA", "./kinora-data"), "data folder")
 	fs.StringVar(&c.cacheDir, "cache", env("KINORA_CACHE", ""), "cache folder (default: the data folder's cache)")
-	fs.StringVar(&c.tmdbKey, "tmdb-key", env("KINORA_TMDB_KEY", ""), "TMDB API key or read access token")
+	fs.StringVar(&c.tmdbKey, "tmdb-key", env("KINORA_TMDB_KEY", builtinTMDBKey), "your own TMDB API key or read access token (default: the one built in)")
 	fs.StringVar(&c.ffprobe, "ffprobe", env("KINORA_FFPROBE", bundledTool("ffprobe")), "path to ffprobe")
 	fs.StringVar(&c.ffmpeg, "ffmpeg", env("KINORA_FFMPEG", ""), "path to ffmpeg (default: next to ffprobe, or on PATH)")
 	fs.BoolVar(&c.debug, "debug", false, "verbose logging")
@@ -222,6 +232,11 @@ func open(c config) (*deps, error) {
 	if c.tmdbKey != "" {
 		d.tmdb = tmdb.New(c.tmdbKey)
 		d.matcher = &match.Matcher{Store: st, Src: d.tmdb, Log: log}
+		source := "your own key"
+		if builtinTMDBKey != "" && c.tmdbKey == builtinTMDBKey {
+			source = "Kinara's built-in key"
+		}
+		log.Info("metadata: TMDB, using " + source)
 	}
 	d.scanner = &scanner.Scanner{Store: st, Prober: d.prober, Matcher: d.matcher, Log: log, Workers: c.workers}
 	d.images = images.New(c.cache("images"))
@@ -300,7 +315,7 @@ func serveUntil(parent context.Context, args []string) error {
 		warnings = append(warnings, "ffprobe was not found. Install ffmpeg (which includes ffprobe) or pass -ffprobe /path/to/ffprobe; files can't be read without it.")
 	}
 	if d.matcher == nil {
-		warnings = append(warnings, "No TMDB key is set, so titles come from file names and there's no artwork. Start the server with KINORA_TMDB_KEY set.")
+		warnings = append(warnings, "No TMDB key: this build has none built in and KINORA_TMDB_KEY isn't set, so titles come from file names and there's no artwork. Set KINORA_TMDB_KEY to your own key.")
 	}
 	ffmpegOK := d.ffmpeg.Available() == nil
 	if !ffmpegOK {

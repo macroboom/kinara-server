@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"kinora/internal/auth"
 	"kinora/internal/store"
@@ -270,4 +271,58 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u store.Use
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// setupMu makes first-run setup one at a time, so two browsers racing on a
+// fresh server can't both become the owner.
+var setupMu sync.Mutex
+
+// setup makes the owner account on a server that has no accounts yet, and
+// signs that browser or app in. It answers like /auth/signup. Only from the
+// home network: whoever makes the first account owns the server. Once any
+// account exists it refuses (409), so it can't be used to add a second owner.
+func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
+	if fromInternet(r) {
+		writeErr(w, http.StatusForbidden, "set the server up from its home network")
+		return
+	}
+	var req signupRequest
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name, err := validUsername(req.Username)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	setupMu.Lock()
+	n, err := s.Store.CountUsers(r.Context())
+	if err != nil {
+		setupMu.Unlock()
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if n > 0 {
+		setupMu.Unlock()
+		writeErr(w, http.StatusConflict, "this server is already set up; sign in instead")
+		return
+	}
+	_, err = s.createAccount(r, name, req.Password, true)
+	setupMu.Unlock()
+	if err != nil {
+		accountErr(w, err)
+		return
+	}
+	token, u, err := s.signIn(r, name, req.Password, sessionDeviceName(req.DeviceName, req.Device))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.attachDevice(r, token, req.Device)
+	profiles, _ := s.Store.Profiles(r.Context(), u.ID)
+	if profiles == nil {
+		profiles = []store.Profile{}
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "user": u, "profiles": profiles})
 }

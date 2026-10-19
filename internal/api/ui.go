@@ -144,6 +144,12 @@ func (s *Server) basePage(r *http.Request, title string, u store.User) page {
 }
 
 func (s *Server) uiHome(w http.ResponseWriter, r *http.Request) {
+	// With the web app installed it is the front door, first-run setup
+	// included; these built-in pages are the fallback for servers without it.
+	if s.WebDir != "" {
+		http.Redirect(w, r, "/app/", http.StatusFound)
+		return
+	}
 	n, err := s.Store.CountUsers(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

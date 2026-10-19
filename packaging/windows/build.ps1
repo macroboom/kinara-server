@@ -7,13 +7,13 @@
 
       powershell -ExecutionPolicy Bypass -File build.ps1
 
-  Needs: Go 1.24+, Rust (cargo, MSVC toolchain), Node 20+ (for the web app),
+  Needs: Go 1.24+, Rust (cargo, MSVC toolchain), Bun (for the web app),
   and Inno Setup 6.3+ (https://jrsoftware.org/isdl.php).
 
   Steps, each printed as it runs:
     1. kinara-server.exe and kinara-tray.exe   (go build, no cgo)
     2. kinora-iroh.exe                         (cargo build --release)
-    3. web\                                    (npm ci + npm run build in kinora-web)
+    3. web\                                    (bun install + bun run build in kinora-web)
     4. ffmpeg\                                 (pinned GyanD build, SHA-256 checked)
     5. THIRD-PARTY.txt
     6. the installer                           (iscc kinara.iss)
@@ -29,6 +29,10 @@ param(
   # essentials_build; the server checks which filters exist either way.
   [ValidateSet("full_build", "essentials_build")]
   [string]$FfmpegFlavor = "full_build",
+  # Kinara's TMDB key, built into the server so posters work out of the box.
+  # Default: tmdb.key next to this script (git-ignored), else $env:KINORA_TMDB_KEY,
+  # else KINORA_TMDB_KEY in the repo's .env (the one the dev server reads).
+  [string]$TmdbKey = "",
   [switch]$SkipWeb,
   [switch]$SkipSidecar
 )
@@ -62,12 +66,34 @@ Need go "Install Go from https://go.dev/dl/"
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force $stage, $cache | Out-Null
 
+# The built-in TMDB key: never in the repository, only in the build.
+if (-not $TmdbKey) {
+  $keyFile = Join-Path $here "tmdb.key"
+  if (Test-Path $keyFile) { $TmdbKey = (Get-Content $keyFile -Raw).Trim() }
+  elseif ($env:KINORA_TMDB_KEY) { $TmdbKey = $env:KINORA_TMDB_KEY.Trim() }
+  else {
+    $dotenv = Join-Path $repo ".env"
+    if (Test-Path $dotenv) {
+      $line = Get-Content $dotenv | Where-Object { $_ -match '^\s*KINORA_TMDB_KEY\s*=' } | Select-Object -Last 1
+      if ($line) { $TmdbKey = ($line -replace '^\s*KINORA_TMDB_KEY\s*=\s*', '').Trim().Trim('"', "'") }
+    }
+  }
+}
+if ($TmdbKey -match '\s') { throw "the TMDB key has spaces in it" }
+if ($TmdbKey) {
+  Write-Host "TMDB: building in a key ending ...$($TmdbKey.Substring([Math]::Max(0, $TmdbKey.Length - 4)))"
+} else {
+  Write-Warning "No TMDB key to build in (pass -TmdbKey, add tmdb.key, set KINORA_TMDB_KEY, or put it in the repo's .env): installs will show titles from file names, without artwork, until people add their own key"
+}
+
 # 1. Server and tray. -H=windowsgui: the tray opens no console window.
 Step "Building kinara-server.exe and kinara-tray.exe"
 $env:GOOS = "windows"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
 Push-Location $repo
 try {
-  go build -trimpath -ldflags "-s -w" -o (Join-Path $stage "kinara-server.exe") ./cmd/kinora-server; Check-Exit "go build server"
+  $serverFlags = "-s -w"
+  if ($TmdbKey) { $serverFlags += " -X main.builtinTMDBKey=$TmdbKey" }
+  go build -trimpath -ldflags $serverFlags -o (Join-Path $stage "kinara-server.exe") ./cmd/kinora-server; Check-Exit "go build server"
   go build -trimpath -ldflags "-s -w -H=windowsgui" -o (Join-Path $stage "kinara-tray.exe") ./cmd/kinara-tray; Check-Exit "go build tray"
 } finally { Pop-Location }
 
@@ -90,11 +116,23 @@ if (-not $SkipSidecar) {
 $web = Join-Path $stage "web"
 if (-not $SkipWeb) {
   Step "Building the web app from $WebRepo"
-  Need npm "Install Node.js 20+ from https://nodejs.org"
   Push-Location (Resolve-Path (Join-Path $here $WebRepo))
   try {
-    npm ci; Check-Exit "npm ci"
-    npm run build; Check-Exit "npm run build"
+    # Use whichever package manager the lockfile belongs to (kinora-web uses Bun).
+    if ((Test-Path "bun.lock") -or (Test-Path "bun.lockb")) {
+      Need bun "Install Bun from https://bun.sh (powershell -c `"irm bun.sh/install.ps1 | iex`")"
+      bun install --frozen-lockfile; Check-Exit "bun install"
+      bun run build; Check-Exit "bun run build"
+    } elseif (Test-Path "package-lock.json") {
+      Need npm "Install Node.js 20+ from https://nodejs.org"
+      npm ci; Check-Exit "npm ci"
+      npm run build; Check-Exit "npm run build"
+    } else {
+      Need npm "Install Node.js 20+ from https://nodejs.org"
+      npm install; Check-Exit "npm install"
+      npm run build; Check-Exit "npm run build"
+    }
+    if (-not (Test-Path "dist\index.html")) { throw "the web build finished but dist\index.html is missing" }
     Copy-Item "dist" $web -Recurse
   } finally { Pop-Location }
 } else {
