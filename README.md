@@ -104,6 +104,14 @@ iroh tunnel) can't create accounts or set the server up.
 | `KINARA_HTTPS_PORT` | `32443` | Port of the HTTPS listener (0: relay only) |
 | `KINARA_PUBLIC_PORT` | none | A port you forwarded on the router to `KINARA_HTTPS_PORT` |
 | `KINARA_PORT_MAPPING` | `on` | `off` stops UPnP / NAT-PMP |
+| `KINARA_TRUSTED_PROXIES` | none | Reverse proxies in front of the server (`127.0.0.1`, `10.0.0.0/8`): their `X-Forwarded-For` names the visitor |
+
+**On a public address** (a VPS, a forwarded port, or behind a reverse proxy
+listed in `KINARA_TRUSTED_PROXIES`), visitors from public addresses are
+treated like remote ones: they can sign in, but the server can't be set up
+from there, nobody can make an account, and sign-in doesn't list the
+accounts. Set a VPS up through an SSH tunnel
+(`ssh -L 8420:127.0.0.1:8420 <server>`, then `http://localhost:8420`).
 
 On Windows, allow `kinara-server.exe` through the firewall on the HTTPS port.
 

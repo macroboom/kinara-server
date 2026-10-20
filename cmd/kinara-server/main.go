@@ -34,6 +34,13 @@
 //	                       vaapi, amf, videotoolbox, or none for the CPU only
 //	KINARA_HW_DEVICE       Linux render node to use (default: each in turn)
 //
+// Behind a reverse proxy (Caddy, nginx) on a public address:
+//
+//	KINARA_TRUSTED_PROXIES  addresses or ranges of the proxies (such as 127.0.0.1),
+//	                        so the visitor's own address is read from
+//	                        X-Forwarded-For. Visitors from public addresses can
+//	                        sign in but can't set the server up or make accounts.
+//
 // Remote access (turned on in the web manager, under Remote access):
 //
 //	KINARA_CLOUD_URL       the Kinara cloud for accounts and remote play (default

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -12,10 +13,16 @@ import (
 )
 
 // fromInternet: the request came from outside the home network, through
-// the iroh tunnel, the cloud relay, or the direct HTTPS listener. Such
-// requests can't create accounts, set the server up or list accounts.
+// the iroh tunnel, the cloud relay or the direct HTTPS listener, or straight
+// from a public address (a server on a VPS, a forwarded port, or behind a
+// reverse proxy named in KINARA_TRUSTED_PROXIES). Such requests can't create
+// accounts, set the server up or list accounts.
 func fromInternet(r *http.Request) bool {
-	return remote.PeerFrom(r.Context()) != nil || cloud.FromInternet(r)
+	if remote.PeerFrom(r.Context()) != nil || cloud.FromInternet(r) {
+		return true
+	}
+	ip := net.ParseIP(clientIP(r))
+	return ip != nil && !localAddress(ip)
 }
 
 // cloudStatus: the manager's Remote access page reads this.
