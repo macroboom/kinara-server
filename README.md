@@ -10,7 +10,8 @@ finds posters, descriptions and cast on TMDB, and streams to the Kinara apps
   preview thumbnails while skipping, and watch parties;
 - remote play away from home with a Kinara account: direct when the network
   allows, through the Kinara relay when it doesn't, with no port forwarding;
-- requests and Discover from TMDB, and webhooks for Sonarr and Radarr.
+- requests and Discover from TMDB, plus webhooks, incoming status hooks and
+  API keys for your own tools, such as a bridge to Sonarr or Radarr.
 
 This repository is the server and its remote access sidecar. The apps are
 separate (see License).
