@@ -20,7 +20,7 @@ import (
 
 const testNode = "ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6"
 
-// header builds a PROXY v2 header the way kinora-iroh's encoder does.
+// header builds a PROXY v2 header the way kinara-iroh's encoder does.
 func header(family byte, addr []byte, tlvs ...[]byte) []byte {
 	body := append([]byte(nil), addr...)
 	for _, t := range tlvs {
@@ -133,10 +133,10 @@ func TestServeTunnel(t *testing.T) {
 	}
 }
 
-// --- A stand-in sidecar: this test binary run with KINORA_FAKE_IROH set. ---
+// --- A stand-in sidecar: this test binary run with KINARA_FAKE_IROH set. ---
 
 func TestMain(m *testing.M) {
-	switch os.Getenv("KINORA_FAKE_IROH") {
+	switch os.Getenv("KINARA_FAKE_IROH") {
 	case "":
 		os.Exit(m.Run())
 	case "bad-config":
@@ -159,13 +159,13 @@ func fakeIroh() {
 		b, _ := json.Marshal(v)
 		fmt.Println(string(b))
 	}
-	fmt.Fprintln(os.Stderr, "fake kinora-iroh starting: "+args)
+	fmt.Fprintln(os.Stderr, "fake kinara-iroh starting: "+args)
 	emit(map[string]any{"type": "ready", "v": 1, "nodeId": testNode, "ticket": "endpointfake"})
 	status := func() {
 		emit(map[string]any{"type": "status", "v": 1, "nodeId": testNode, "ticket": "endpointfake",
 			"relay": map[string]any{"mode": "default", "connected": true},
 			"addrs": []any{}, "warnings": []any{}, "blocked": blocked, "activeStreams": 0, "peers": []any{},
-			"secret": os.Getenv("KINORA_IROH_SECRET"), "args": args})
+			"secret": os.Getenv("KINARA_IROH_SECRET"), "args": args})
 	}
 	status()
 	sc := bufio.NewScanner(os.Stdin)
@@ -202,7 +202,7 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 
 func TestSidecarLifecycle(t *testing.T) {
 	exe, _ := os.Executable()
-	t.Setenv("KINORA_FAKE_IROH", "1")
+	t.Setenv("KINARA_FAKE_IROH", "1")
 	other := strings.Repeat("b", 64)
 	s := &Sidecar{
 		Bin: exe, DataDir: t.TempDir(), Target: "127.0.0.1:8421", Secret: "s3cret",
@@ -247,7 +247,7 @@ func TestSidecarLifecycle(t *testing.T) {
 
 func TestSidecarBadConfigStops(t *testing.T) {
 	exe, _ := os.Executable()
-	t.Setenv("KINORA_FAKE_IROH", "bad-config")
+	t.Setenv("KINARA_FAKE_IROH", "bad-config")
 	s := &Sidecar{Bin: exe, DataDir: t.TempDir(), Target: "127.0.0.1:8421", Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

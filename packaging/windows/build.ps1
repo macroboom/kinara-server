@@ -12,8 +12,8 @@
 
   Steps, each printed as it runs:
     1. kinara-server.exe and kinara-tray.exe   (go build, no cgo)
-    2. kinora-iroh.exe                         (cargo build --release)
-    3. web\                                    (bun install + bun run build in kinora-web)
+    2. kinara-iroh.exe                         (cargo build --release)
+    3. web\                                    (bun install + bun run build in kinara-web)
     4. ffmpeg\                                 (pinned GyanD build, SHA-256 checked)
     5. THIRD-PARTY.txt
     6. the installer                           (iscc kinara.iss)
@@ -23,15 +23,15 @@
   later build refuses a zip that doesn't match.
 #>
 param(
-  [string]$WebRepo = "..\..\..\kinora-web",
+  [string]$WebRepo = "..\..\..\kinara-web",
   [string]$FfmpegVersion = "9.0.2",
   # full_build adds libplacebo (better HDR / Dolby Vision tone mapping) over
   # essentials_build; the server checks which filters exist either way.
   [ValidateSet("full_build", "essentials_build")]
   [string]$FfmpegFlavor = "full_build",
   # Kinara's TMDB key, built into the server so posters work out of the box.
-  # Default: tmdb.key next to this script (git-ignored), else $env:KINORA_TMDB_KEY,
-  # else KINORA_TMDB_KEY in the repo's .env (the one the dev server reads).
+  # Default: tmdb.key next to this script (git-ignored), else $env:KINARA_TMDB_KEY,
+  # else KINARA_TMDB_KEY in the repo's .env (the one the dev server reads).
   [string]$TmdbKey = "",
   [switch]$SkipWeb,
   [switch]$SkipSidecar
@@ -49,8 +49,8 @@ function Need($cmd, $hint) {
 }
 function Check-Exit($what) { if ($LASTEXITCODE -ne 0) { throw "$what failed (exit $LASTEXITCODE)" } }
 
-# The version is the one the server reports (cmd/kinora-server/main.go).
-$main = Get-Content (Join-Path $repo "cmd\kinora-server\main.go") -Raw
+# The version is the one the server reports (cmd/kinara-server/main.go).
+$main = Get-Content (Join-Path $repo "cmd\kinara-server\main.go") -Raw
 if ($main -notmatch 'const version = "([^"]+)"') { throw "can't find the version in main.go" }
 $version = $Matches[1]
 Write-Host "Kinara $version" -ForegroundColor Green
@@ -70,12 +70,12 @@ New-Item -ItemType Directory -Force $stage, $cache | Out-Null
 if (-not $TmdbKey) {
   $keyFile = Join-Path $here "tmdb.key"
   if (Test-Path $keyFile) { $TmdbKey = (Get-Content $keyFile -Raw).Trim() }
-  elseif ($env:KINORA_TMDB_KEY) { $TmdbKey = $env:KINORA_TMDB_KEY.Trim() }
+  elseif ($env:KINARA_TMDB_KEY) { $TmdbKey = $env:KINARA_TMDB_KEY.Trim() }
   else {
     $dotenv = Join-Path $repo ".env"
     if (Test-Path $dotenv) {
-      $line = Get-Content $dotenv | Where-Object { $_ -match '^\s*KINORA_TMDB_KEY\s*=' } | Select-Object -Last 1
-      if ($line) { $TmdbKey = ($line -replace '^\s*KINORA_TMDB_KEY\s*=\s*', '').Trim().Trim('"', "'") }
+      $line = Get-Content $dotenv | Where-Object { $_ -match '^\s*KINARA_TMDB_KEY\s*=' } | Select-Object -Last 1
+      if ($line) { $TmdbKey = ($line -replace '^\s*KINARA_TMDB_KEY\s*=\s*', '').Trim().Trim('"', "'") }
     }
   }
 }
@@ -83,7 +83,7 @@ if ($TmdbKey -match '\s') { throw "the TMDB key has spaces in it" }
 if ($TmdbKey) {
   Write-Host "TMDB: building in a key ending ...$($TmdbKey.Substring([Math]::Max(0, $TmdbKey.Length - 4)))"
 } else {
-  Write-Warning "No TMDB key to build in (pass -TmdbKey, add tmdb.key, set KINORA_TMDB_KEY, or put it in the repo's .env): installs will show titles from file names, without artwork, until people add their own key"
+  Write-Warning "No TMDB key to build in (pass -TmdbKey, add tmdb.key, set KINARA_TMDB_KEY, or put it in the repo's .env): installs will show titles from file names, without artwork, until people add their own key"
 }
 
 # 1. Server and tray. -H=windowsgui: the tray opens no console window.
@@ -93,23 +93,23 @@ Push-Location $repo
 try {
   $serverFlags = "-s -w"
   if ($TmdbKey) { $serverFlags += " -X main.builtinTMDBKey=$TmdbKey" }
-  go build -trimpath -ldflags $serverFlags -o (Join-Path $stage "kinara-server.exe") ./cmd/kinora-server; Check-Exit "go build server"
+  go build -trimpath -ldflags $serverFlags -o (Join-Path $stage "kinara-server.exe") ./cmd/kinara-server; Check-Exit "go build server"
   go build -trimpath -ldflags "-s -w -H=windowsgui" -o (Join-Path $stage "kinara-tray.exe") ./cmd/kinara-tray; Check-Exit "go build tray"
 } finally { Pop-Location }
 
 # 2. Remote access sidecar.
 if (-not $SkipSidecar) {
-  Step "Building kinora-iroh.exe"
+  Step "Building kinara-iroh.exe"
   Need cargo "Install Rust from https://rustup.rs (MSVC toolchain)"
   Push-Location (Join-Path $repo "sidecar")
   try {
-    cargo build --release -p kinora-iroh; Check-Exit "cargo build"
-    Copy-Item "target\release\kinora-iroh.exe" $stage
+    cargo build --release -p kinara-iroh; Check-Exit "cargo build"
+    Copy-Item "target\release\kinara-iroh.exe" $stage
   } finally { Pop-Location }
 } else {
-  Write-Warning "Skipping kinora-iroh.exe: remote access won't work in this build"
+  Write-Warning "Skipping kinara-iroh.exe: remote access won't work in this build"
   # Inno needs the file to exist.
-  Set-Content (Join-Path $stage "kinora-iroh.exe") "" -NoNewline
+  Set-Content (Join-Path $stage "kinara-iroh.exe") "" -NoNewline
 }
 
 # 3. Web app.
@@ -118,7 +118,7 @@ if (-not $SkipWeb) {
   Step "Building the web app from $WebRepo"
   Push-Location (Resolve-Path (Join-Path $here $WebRepo))
   try {
-    # Use whichever package manager the lockfile belongs to (kinora-web uses Bun).
+    # Use whichever package manager the lockfile belongs to (kinara-web uses Bun).
     if ((Test-Path "bun.lock") -or (Test-Path "bun.lockb")) {
       Need bun "Install Bun from https://bun.sh (powershell -c `"irm bun.sh/install.ps1 | iex`")"
       bun install --frozen-lockfile; Check-Exit "bun install"
@@ -194,7 +194,7 @@ FFmpeg $FfmpegVersion ($FfmpegFlavor), in ffmpeg\
 
 modernc.org/sqlite (BSD-3-Clause), compiled into kinara-server.exe.
 
-kinora-iroh.exe is built with iroh (https://github.com/n0-computer/iroh,
+kinara-iroh.exe is built with iroh (https://github.com/n0-computer/iroh,
 MIT or Apache-2.0) and other Rust crates under MIT, Apache-2.0 and similar
 permissive licenses; see sidecar\Cargo.lock in the Kinara server source.
 

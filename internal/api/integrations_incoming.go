@@ -14,13 +14,13 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // Incoming hooks: secret addresses the owner's tools post title statuses
-// to, in the Kinora format or their own JSON mapped field by field.
+// to, in the Kinara format or their own JSON mapped field by field.
 
-// Kinora's states for a title on its way.
+// Kinara's states for a title on its way.
 const (
 	stateQueued     = "queued"
 	stateInProgress = "in_progress"
@@ -113,19 +113,19 @@ func checkIncoming(h *store.IncomingHook) error {
 	if h.Name == "" || len(h.Name) > 80 {
 		return errors.New("give the hook a name (up to 80 characters)")
 	}
-	if h.Format != "kinora" && h.Format != "custom" {
-		return errors.New(`format is "kinora" or "custom"`)
+	if h.Format != "kinara" && h.Format != "custom" {
+		return errors.New(`format is "kinara" or "custom"`)
 	}
 	for k, v := range h.Mapping {
 		if !mappingFields[k] {
-			return fmt.Errorf("%q isn't a field Kinora reads", k)
+			return fmt.Errorf("%q isn't a field Kinara reads", k)
 		}
 		if len(v) > 200 {
 			return fmt.Errorf("the path for %s is too long", k)
 		}
 	}
 	if h.Format == "custom" && h.Mapping["state"] == "" && h.Mapping["progress"] == "" {
-		return errors.New("map the state or the progress, so Kinora knows where the title is")
+		return errors.New("map the state or the progress, so Kinara knows where the title is")
 	}
 	stateMap := []store.StateMapping{}
 	for _, m := range h.StateMap {
@@ -134,7 +134,7 @@ func checkIncoming(h *store.IncomingHook) error {
 			continue
 		}
 		if !validState(m.To) {
-			return fmt.Errorf("%q isn't one of Kinora's states (queued, in_progress, done, failed)", m.To)
+			return fmt.Errorf("%q isn't one of Kinara's states (queued, in_progress, done, failed)", m.To)
 		}
 		stateMap = append(stateMap, m)
 	}
@@ -177,7 +177,7 @@ func (s *Server) createIncoming(w http.ResponseWriter, r *http.Request, u store.
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	h := store.IncomingHook{Token: newHookToken(), Enabled: true, Format: "kinora", Mapping: map[string]string{},
+	h := store.IncomingHook{Token: newHookToken(), Enabled: true, Format: "kinara", Mapping: map[string]string{},
 		StateMap: []store.StateMapping{}, ProgressScale: "auto", OnDone: "scan", ExpireHours: 6, Visibility: "owners"}
 	if err := in.apply(&h); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -297,7 +297,7 @@ func (s *Server) hookIn(w http.ResponseWriter, r *http.Request) {
 }
 
 // postStatus is an update sent with an API key (scope status:write) or by
-// an owner: the Kinora format, as from an incoming hook.
+// an owner: the Kinara format, as from an incoming hook.
 func (s *Server) postStatus(w http.ResponseWriter, r *http.Request, u store.User) {
 	src := statusSource{key: "user:" + strconv.FormatInt(u.ID, 10), name: u.Username}
 	if k := keyFrom(r); k != nil {
@@ -310,13 +310,13 @@ func (s *Server) postStatus(w http.ResponseWriter, r *http.Request, u store.User
 type statusSource struct {
 	key  string
 	name string
-	// hook is nil for API keys (Kinora format, ready scans, everyone sees it).
+	// hook is nil for API keys (Kinara format, ready scans, everyone sees it).
 	hook *store.IncomingHook
 }
 
 func (src statusSource) format() string {
 	if src.hook == nil {
-		return "kinora"
+		return "kinara"
 	}
 	return src.hook.Format
 }
@@ -372,7 +372,7 @@ func (s *Server) receiveStatus(w http.ResponseWriter, r *http.Request, src statu
 		if src.hook != nil {
 			scale = src.hook.ProgressScale
 		}
-		upd, err = readKinora(doc, scale)
+		upd, err = readKinara(doc, scale)
 	}
 	if err != nil {
 		src.logReceived(s, r, false, err.Error(), body)
@@ -415,8 +415,8 @@ type statusUpdate struct {
 	Ref string
 }
 
-// readKinora reads the Kinora format (see the manager's Reference tab).
-func readKinora(doc any, scale string) (statusUpdate, error) {
+// readKinara reads the Kinara format (see the manager's Reference tab).
+func readKinara(doc any, scale string) (statusUpdate, error) {
 	obj, ok := doc.(map[string]any)
 	if !ok {
 		return statusUpdate{}, errors.New("send one JSON object per update")
@@ -553,8 +553,8 @@ func normalKind(s string) string {
 	return ""
 }
 
-// mapState turns a tool's state word into Kinora's: through the hook's
-// list first (any case), then Kinora's own names. "" when unknown.
+// mapState turns a tool's state word into Kinara's: through the hook's
+// list first (any case), then Kinara's own names. "" when unknown.
 func mapState(raw string, stateMap []store.StateMapping) string {
 	raw = strings.TrimSpace(raw)
 	for _, m := range stateMap {

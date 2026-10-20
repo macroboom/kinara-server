@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/match"
-	"kinora/internal/parse"
-	"kinora/internal/probe"
-	"kinora/internal/store"
+	"kinara/internal/match"
+	"kinara/internal/parse"
+	"kinara/internal/probe"
+	"kinara/internal/store"
 )
 
 // ErrBusy is returned when a library is already being scanned.

@@ -13,13 +13,13 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"kinora/internal/auth"
-	"kinora/internal/images"
-	"kinora/internal/probe"
-	"kinora/internal/scanner"
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
-	"kinora/internal/watch"
+	"kinara/internal/auth"
+	"kinara/internal/images"
+	"kinara/internal/probe"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
+	"kinara/internal/watch"
 )
 
 // A fake TMDB with one movie (1, also in the library) and one show (2).
@@ -49,7 +49,7 @@ func fakeTMDBServer(t *testing.T, calls *atomic.Int32) *httptest.Server {
 func TestExternalTitles(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "kinora.db"))
+	st, err := store.Open(filepath.Join(dir, "kinara.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

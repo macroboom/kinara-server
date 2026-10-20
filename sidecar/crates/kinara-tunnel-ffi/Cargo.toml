@@ -1,0 +1,23 @@
+[package]
+name = "kinara-tunnel-ffi"
+description = "The tunnel client for the Kinara apps: a C ABI (iOS) and JNI entry points (Android)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+# cdylib: libkinara_tunnel_ffi.so for Android. staticlib: the .a that an iOS
+# xcframework is made from.
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+# Not `workspace = true`: that would bring the workspace's default features
+# (clap for the command line tools), which the apps don't need.
+kinara-tunnel = { path = "../kinara-tunnel", default-features = false, features = ["mdns"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni-sys = "0.3"

@@ -21,7 +21,7 @@ const (
 	HWVideoToolbox = "videotoolbox" // Apple
 )
 
-// hwChoice is a forced backend from KINORA_HWACCEL ("auto" or "" picks).
+// hwChoice is a forced backend from KINARA_HWACCEL ("auto" or "" picks).
 func (t *Tool) hwChoice() string {
 	return strings.ToLower(strings.TrimSpace(t.HWAccel))
 }
@@ -129,7 +129,7 @@ type renderNode struct {
 }
 
 // renderNodes lists the Linux GPU render nodes this process can open,
-// with their vendors (or just dev, when KINORA_HW_DEVICE names one).
+// with their vendors (or just dev, when KINARA_HW_DEVICE names one).
 func renderNodes(dev string) []renderNode {
 	paths := []string{dev}
 	if dev == "" {

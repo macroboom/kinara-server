@@ -30,7 +30,7 @@
   {{else}}<p class="quiet">Nothing needs a look.</p>{{end}}
 
 {{else if eq .Data.Tab "files"}}
-  <h2>Files Kinora couldn't place</h2>
+  <h2>Files Kinara couldn't place</h2>
   {{with .Data.Unplaced}}
   <p class="quiet">In a TV library, every file needs a season and episode number, like <code>Show/Season 1/Show - S01E02.mkv</code>.</p>
   <div class="card table-wrap"><table>
@@ -75,7 +75,7 @@
 <div class="row">
   <form class="inline" method="post" action="/ui/libraries/{{$lib.ID}}/scan"><button>Scan now</button></form>
   <form class="inline" method="post" action="/ui/libraries/{{$lib.ID}}/rematch"><button>Retry unmatched</button></form>
-  <form class="inline" method="post" action="/ui/libraries/{{$lib.ID}}/delete" onsubmit="return confirm('Remove this library from Kinora? Your files are not touched.')"><button class="danger">Remove library</button></form>
+  <form class="inline" method="post" action="/ui/libraries/{{$lib.ID}}/delete" onsubmit="return confirm('Remove this library from Kinara? Your files are not touched.')"><button class="danger">Remove library</button></form>
 </div>
 {{end}}
 {{template "bottom"}}{{end}}

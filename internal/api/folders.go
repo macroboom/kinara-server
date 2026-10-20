@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // The folder picker: lets the manager page browse folders on the server's

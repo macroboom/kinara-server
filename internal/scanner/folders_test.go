@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/probe"
-	"kinora/internal/store"
+	"kinara/internal/probe"
+	"kinara/internal/store"
 )
 
 // A library with two folders scans both, each file relative to its own

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"kinora/internal/ffmpeg"
-	"kinora/internal/store"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/store"
 )
 
 // ThumbTime picks the moment to grab a picture from: a tenth of the way in

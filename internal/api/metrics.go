@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/metrics"
-	"kinora/internal/store"
+	"kinara/internal/metrics"
+	"kinara/internal/store"
 )
 
 // The manager's metrics page: the computer and traffic over time, storage,
@@ -178,7 +178,7 @@ func (s *Server) buildStorage(r *http.Request) (*storageView, error) {
 			}
 		}
 		sort.Slice(v.Cache, func(i, j int) bool { return v.Cache[i].Bytes > v.Cache[j].Bytes })
-		for _, f := range []string{"kinora.db", "kinora.db-wal", "kinora.db-shm"} {
+		for _, f := range []string{"kinara.db", "kinara.db-wal", "kinara.db-shm"} {
 			if fi, err := os.Stat(filepath.Join(s.DataDir, f)); err == nil {
 				v.Database += fi.Size()
 			}

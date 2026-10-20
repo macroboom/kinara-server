@@ -11,8 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
 )
 
 // Requests: anyone signed in can ask for a movie or show that isn't on the

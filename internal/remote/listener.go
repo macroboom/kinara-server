@@ -16,7 +16,7 @@ import (
 const headerTimeout = 5 * time.Second
 
 // Listener wraps the loopback tunnel listener: every connection must start
-// with kinora-iroh's PROXY v2 header (and secret); anything else is dropped.
+// with kinara-iroh's PROXY v2 header (and secret); anything else is dropped.
 // Headers are read off the accept loop, so a stray connection that never
 // speaks can't hold up the others.
 type Listener struct {

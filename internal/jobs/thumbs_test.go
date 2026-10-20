@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 func TestThumbTime(t *testing.T) {

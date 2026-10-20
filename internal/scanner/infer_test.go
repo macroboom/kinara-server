@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 func TestInferFrom(t *testing.T) {

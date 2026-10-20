@@ -1,4 +1,4 @@
--- Kinora initial schema.
+-- Kinara initial schema.
 -- Times are Unix seconds. Item and version IDs are random 128-bit hex strings.
 
 CREATE TABLE libraries (

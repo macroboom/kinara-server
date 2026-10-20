@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 const (

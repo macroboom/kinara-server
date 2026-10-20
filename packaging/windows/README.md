@@ -5,9 +5,9 @@ installer published by Macroboom LLC.
 
 ## Build (on Windows)
 
-Needs Go 1.24+, Rust with the MSVC toolchain, Bun (for kinora-web) and
-[Inno Setup 6.3+](https://jrsoftware.org/isdl.php). `kinora-web` must sit next
-to `kinora-server` (or pass `-WebRepo`).
+Needs Go 1.24+, Rust with the MSVC toolchain, Bun (for kinara-web) and
+[Inno Setup 6.3+](https://jrsoftware.org/isdl.php). `kinara-web` must sit next
+to `kinara-server` (or pass `-WebRepo`).
 
 ```powershell
 cd packaging\windows
@@ -16,11 +16,11 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 **TMDB key.** Release builds carry Kinara's own TMDB key so posters and
 descriptions work with no setup. Put it in `tmdb.key` next to `build.ps1`
-(git-ignored), pass `-TmdbKey`, have `KINORA_TMDB_KEY` set, or leave it in the
+(git-ignored), pass `-TmdbKey`, have `KINARA_TMDB_KEY` set, or leave it in the
 repo's `.env` where the dev server reads it; the script
 builds it in with `-ldflags -X main.builtinTMDBKey=...` and prints only its
 last four characters. It is never in the repository. The installer has an
-optional page for people's own key, saved as `KINORA_TMDB_KEY` in
+optional page for people's own key, saved as `KINARA_TMDB_KEY` in
 `kinara.env`, which replaces the built-in one; leaving it empty goes back to
 the built-in key.
 
@@ -47,8 +47,8 @@ The wizard says all of this to the user before anything happens:
 
 Then it:
 
-- writes `kinara.env` in the data folder (`KINORA_DATA`, `KINORA_CACHE`,
-  `KINORA_LISTEN`), keeping whatever else is already in it;
+- writes `kinara.env` in the data folder (`KINARA_DATA`, `KINARA_CACHE`,
+  `KINARA_LISTEN`), keeping whatever else is already in it;
 - records the folders, mode, account and port in `HKLM\Software\Kinara`;
 - **service mode:** creates the `Kinara` service
   (`kinara-server.exe service`, delayed auto start, restarts after 5 s, 15 s,
@@ -57,8 +57,8 @@ Then it:
   Administrators (`logs\` stays readable by Users) and starts it;
 - **sign-in mode:** removes any old service, lets Users write the data and
   cache folders, and the tray runs `kinara-server.exe serve` hidden as the
-  signed-in user (`KINORA_STOP_ON_EOF=1`: the server stops when the tray goes);
-- adds firewall rules for `kinara-server.exe` and `kinora-iroh.exe` (if ticked).
+  signed-in user (`KINARA_STOP_ON_EOF=1`: the server stops when the tray goes);
+- adds firewall rules for `kinara-server.exe` and `kinara-iroh.exe` (if ticked).
 
 Upgrades keep the folders, mode and account picked last time, stop the server
 and tray first, and never change a service account set by hand in

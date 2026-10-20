@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 // End credits are found two ways:

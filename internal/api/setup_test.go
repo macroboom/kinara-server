@@ -11,13 +11,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // A fresh server: the first account is made through /setup and is the
 // owner; after that /setup refuses.
 func TestFirstRunSetup(t *testing.T) {
-	st, err := store.Open(filepath.Join(t.TempDir(), "kinora.db"))
+	st, err := store.Open(filepath.Join(t.TempDir(), "kinara.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

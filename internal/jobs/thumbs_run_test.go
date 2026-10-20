@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"kinora/internal/ffmpeg"
-	"kinora/internal/store"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/store"
 )
 
 // A picture is made for an "Other videos" title and becomes its backdrop.

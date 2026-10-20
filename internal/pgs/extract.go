@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 // Timeline is a PGS track ready for an app to draw: when each set of

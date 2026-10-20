@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/auth"
-	"kinora/internal/images"
-	"kinora/internal/probe"
-	"kinora/internal/scanner"
-	"kinora/internal/store"
-	"kinora/internal/watch"
+	"kinara/internal/auth"
+	"kinara/internal/images"
+	"kinara/internal/probe"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
+	"kinara/internal/watch"
 )
 
 // featureServer is a server over an empty database with one owner, alex.
@@ -27,7 +27,7 @@ func featureServer(t *testing.T) (*store.Store, *client, func(user, pass string)
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "kinora.db"))
+	st, err := store.Open(filepath.Join(dir, "kinara.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

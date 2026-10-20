@@ -6,13 +6,13 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  # The server's main package is in cmd/kinora-server, not the repo root.
-  cmd = "go build -o ./tmp/kinora-server.exe ./cmd/kinora-server"
-  bin = "tmp/kinora-server.exe"
+  # The server's main package is in cmd/kinara-server, not the repo root.
+  cmd = "go build -o ./tmp/kinara-server.exe ./cmd/kinara-server"
+  bin = "tmp/kinara-server.exe"
   # Templates and migrations are embedded, so they need a rebuild too.
   include_ext = ["go", "html", "css", "js", "sql"]
   include_file = [".env"]
-  exclude_dir = ["tmp", "kinora-data", "vendor", ".git"]
+  exclude_dir = ["tmp", "kinara-data", "vendor", ".git"]
   exclude_regex = ["_test\\.go$"]
   # Wait for a burst of saves to finish before rebuilding.
   delay = 500

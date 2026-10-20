@@ -3,7 +3,7 @@ package match
 import (
 	"testing"
 
-	"kinora/internal/parse"
+	"kinara/internal/parse"
 )
 
 func TestRankPrefersTitleAndYear(t *testing.T) {

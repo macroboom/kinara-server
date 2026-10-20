@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"kinora/internal/ffmpeg"
-	"kinora/internal/store"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/store"
 )
 
 func has(args []string, seq ...string) bool {

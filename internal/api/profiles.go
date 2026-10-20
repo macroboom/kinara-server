@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"kinora/internal/auth"
-	"kinora/internal/images"
-	"kinora/internal/store"
+	"kinara/internal/auth"
+	"kinara/internal/images"
+	"kinara/internal/store"
 )
 
 // --- Profiles ("who's watching") ---

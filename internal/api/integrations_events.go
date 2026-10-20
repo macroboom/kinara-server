@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"kinora/internal/scanner"
-	"kinora/internal/store"
-	"kinora/internal/watch"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
+	"kinara/internal/watch"
 )
 
 // Building event payloads where things happen. Each note* function is a

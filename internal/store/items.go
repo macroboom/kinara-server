@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"kinora/internal/parse"
+	"kinara/internal/parse"
 )
 
 type scanner interface{ Scan(dest ...any) error }

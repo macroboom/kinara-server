@@ -65,7 +65,7 @@ Name: desktopicon; Description: "Desktop shortcut to open Kinara"; Flags: unchec
 
 [Files]
 Source: "{#Stage}\kinara-server.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
-Source: "{#Stage}\kinora-iroh.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
+Source: "{#Stage}\kinara-iroh.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
 Source: "{#Stage}\kinara-tray.exe"; DestDir: "{app}"; Flags: ignoreversion restartreplace
 Source: "kinara.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Stage}\ffmpeg\*"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion recursesubdirs restartreplace
@@ -178,9 +178,9 @@ begin
     for I := 0 to GetArrayLength(Lines) - 1 do
     begin
       S := Trim(Lines[I]);
-      if Pos('KINORA_LISTEN=', S) = 1 then
+      if Pos('KINARA_LISTEN=', S) = 1 then
       begin
-        S := Copy(S, Length('KINORA_LISTEN=') + 1, MaxInt);
+        S := Copy(S, Length('KINARA_LISTEN=') + 1, MaxInt);
         StringChangeEx(S, '"', '', True);
         P := Length(S);
         while (P > 0) and (S[P] <> ':') do P := P - 1;
@@ -263,7 +263,7 @@ begin
   Sleep(2000);
   // Last resort so files can be replaced.
   Run(Sys('taskkill.exe'), '/IM kinara-server.exe /F');
-  Run(Sys('taskkill.exe'), '/IM kinora-iroh.exe /F');
+  Run(Sys('taskkill.exe'), '/IM kinara-iroh.exe /F');
 end;
 
 procedure RemoveService;
@@ -288,7 +288,7 @@ begin
   Result :=
     'FILES, in the program folder you pick next (default C:\Program Files\Kinara):' + #13#10 +
     '  kinara-server.exe    the Kinara server: scans your folders, serves the apps.' + #13#10 +
-    '  kinora-iroh.exe      remote access helper. Idle unless you turn on remote' + #13#10 +
+    '  kinara-iroh.exe      remote access helper. Idle unless you turn on remote' + #13#10 +
     '                       access in Kinara''s settings.' + #13#10 +
     '  kinara-tray.exe      the small icon by the clock: status, open, start/stop.' + #13#10 +
     '  ffmpeg\              FFmpeg and FFprobe (GPL build, unmodified): read your' + #13#10 +
@@ -304,7 +304,7 @@ begin
     '  - A Windows service named "Kinara" that starts with the PC (only if you' + #13#10 +
     '    pick that mode; you can instead run it only while you''re signed in).' + #13#10 +
     '    If it crashes, Windows restarts it after 5 s, 15 s, then 60 s.' + #13#10 +
-    '  - Firewall rules for kinara-server.exe and kinora-iroh.exe on private and' + #13#10 +
+    '  - Firewall rules for kinara-server.exe and kinara-iroh.exe on private and' + #13#10 +
     '    work networks (optional, on by default; public networks stay closed).' + #13#10 +
     '  - Settings under HKLM\Software\Kinara (where your folders are, the port).' + #13#10 +
     '  - Folder permissions. Service mode: the data folder (it holds your users''' + #13#10 +
@@ -411,7 +411,7 @@ begin
     'built-in key.');
   TmdbPage.Add('Your TMDB key (optional):', False);
   if IsUpgrade and (PrevDataDir <> '') then
-    TmdbPage.Values[0] := EnvValue(PrevDataDir + '\kinara.env', 'KINORA_TMDB_KEY');
+    TmdbPage.Values[0] := EnvValue(PrevDataDir + '\kinara.env', 'KINARA_TMDB_KEY');
 end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
@@ -582,15 +582,15 @@ var
 begin
   SetArrayLength(Keys, 2);
   SetArrayLength(Values, 2);
-  Keys[0] := 'KINORA_DATA';  Values[0] := GetDataDir('');
-  Keys[1] := 'KINORA_CACHE'; Values[1] := GetCacheDir('');
+  Keys[0] := 'KINARA_DATA';  Values[0] := GetDataDir('');
+  Keys[1] := 'KINARA_CACHE'; Values[1] := GetCacheDir('');
   SetEnvLines(EnvFile, Keys, Values);
   if GetPort('') = '8420' then
   begin
     // Write the port explicitly the first time, so it's easy to find and change.
     SetArrayLength(Keys, 1);
     SetArrayLength(Values, 1);
-    Keys[0] := 'KINORA_LISTEN'; Values[0] := ':8420';
+    Keys[0] := 'KINARA_LISTEN'; Values[0] := ':8420';
     SetEnvLines(EnvFile, Keys, Values);
   end;
   // Your own TMDB key replaces the built-in one; an empty box goes back to it.
@@ -598,10 +598,10 @@ begin
   begin
     SetArrayLength(Keys, 1);
     SetArrayLength(Values, 1);
-    Keys[0] := 'KINORA_TMDB_KEY'; Values[0] := OwnTmdbKey;
+    Keys[0] := 'KINARA_TMDB_KEY'; Values[0] := OwnTmdbKey;
     SetEnvLines(EnvFile, Keys, Values);
   end else
-    RemoveEnvKey(EnvFile, 'KINORA_TMDB_KEY');
+    RemoveEnvKey(EnvFile, 'KINARA_TMDB_KEY');
 end;
 
 procedure GrantFolder(const Dir, Who: String);
@@ -642,7 +642,7 @@ begin
   Run(Sys('sc.exe'), 'failureflag ' + ServiceName + ' 1');
   // The service finds its settings file through its own environment.
   RegWriteMultiStringValue(HKLM, SvcKey, 'Environment',
-    'KINORA_ENV_FILE=' + EnvFile + #0 + 'KINORA_DATA=' + GetDataDir(''));
+    'KINARA_ENV_FILE=' + EnvFile + #0 + 'KINARA_DATA=' + GetDataDir(''));
   if WizardIsTaskSelected('usercontrol') then
     Run(Sys('sc.exe'), 'sdset ' + ServiceName + ' ' + UserControlSDDL)
   else
@@ -666,7 +666,7 @@ begin
   if WizardIsTaskSelected('firewall') then
   begin
     Run(Sys('netsh.exe'), 'advfirewall firewall add rule name="Kinara Media Server" dir=in action=allow enable=yes profile=private,domain program="' + ExpandConstant('{app}\kinara-server.exe') + '"');
-    Run(Sys('netsh.exe'), 'advfirewall firewall add rule name="Kinara Remote Access" dir=in action=allow enable=yes profile=private,domain program="' + ExpandConstant('{app}\kinora-iroh.exe') + '"');
+    Run(Sys('netsh.exe'), 'advfirewall firewall add rule name="Kinara Remote Access" dir=in action=allow enable=yes profile=private,domain program="' + ExpandConstant('{app}\kinara-iroh.exe') + '"');
   end;
 
   if IsServiceMode then
@@ -726,7 +726,7 @@ begin
     RemoveService;
     Sleep(1000);
     Run(Sys('taskkill.exe'), '/IM kinara-server.exe /F');
-    Run(Sys('taskkill.exe'), '/IM kinora-iroh.exe /F');
+    Run(Sys('taskkill.exe'), '/IM kinara-iroh.exe /F');
     RemoveFirewallRules;
   end;
   if (CurUninstallStep = usPostUninstall) and DeleteData then

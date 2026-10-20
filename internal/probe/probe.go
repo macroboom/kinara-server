@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // Result is what the server needs to know to decide how a file plays.

@@ -14,14 +14,14 @@ import (
 	"strings"
 	"testing"
 
-	"kinora/internal/auth"
-	"kinora/internal/ffmpeg"
-	"kinora/internal/images"
-	"kinora/internal/probe"
-	"kinora/internal/scanner"
-	"kinora/internal/store"
-	"kinora/internal/transcode"
-	"kinora/internal/watch"
+	"kinara/internal/auth"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/images"
+	"kinara/internal/probe"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
+	"kinara/internal/transcode"
+	"kinara/internal/watch"
 )
 
 // An iPhone or Safari asks for HLS: the playlist and segments come without
@@ -36,7 +36,7 @@ func TestHLSAPI(t *testing.T) {
 	dir := t.TempDir()
 	clip := filepath.Join(dir, "Clip.mkv")
 	makeClip(t, clip)
-	st, err := store.Open(filepath.Join(dir, "kinora.db"))
+	st, err := store.Open(filepath.Join(dir, "kinara.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestSubtitlesAPI(t *testing.T) {
 		"-map", "0:v", "-map", "1:s", "-c:v", "libx264", "-c:s", "srt", clip).CombinedOutput(); err != nil {
 		t.Skipf("can't make clip: %v %s", err, out)
 	}
-	st, err := store.Open(filepath.Join(dir, "kinora.db"))
+	st, err := store.Open(filepath.Join(dir, "kinara.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// sign makes a token the way kinora-cloud does.
+// sign makes a token the way kinara-cloud does.
 func sign(key ed25519.PrivateKey, c map[string]any) string {
 	body, _ := json.Marshal(c)
 	head := "kc1." + base64.RawURLEncoding.EncodeToString(body)

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"kinora/internal/ffmpeg"
-	"kinora/internal/store"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/store"
 )
 
 func TestMakeReal(t *testing.T) {

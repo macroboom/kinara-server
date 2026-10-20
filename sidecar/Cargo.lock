@@ -1650,34 +1650,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "kinora-connect"
+name = "kinara-connect"
 version = "0.1.0"
 dependencies = [
  "clap",
- "kinora-tunnel",
+ "kinara-tunnel",
  "serde_json",
  "tokio",
  "tracing-subscriber",
 ]
 
 [[package]]
-name = "kinora-e2e"
+name = "kinara-e2e"
 version = "0.1.0"
 dependencies = [
  "clap",
- "kinora-testserver",
- "kinora-tunnel",
+ "kinara-testserver",
+ "kinara-tunnel",
  "serde_json",
  "sha2 0.10.9",
 ]
 
 [[package]]
-name = "kinora-iroh"
+name = "kinara-iroh"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "kinora-tunnel",
+ "kinara-tunnel",
  "serde_json",
  "tokio",
  "tracing",
@@ -1685,7 +1685,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kinora-testserver"
+name = "kinara-testserver"
 version = "0.1.0"
 dependencies = [
  "bytes",
@@ -1694,14 +1694,14 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "kinora-tunnel",
+ "kinara-tunnel",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
 ]
 
 [[package]]
-name = "kinora-tunnel"
+name = "kinara-tunnel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1716,11 +1716,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "kinora-tunnel-ffi"
+name = "kinara-tunnel-ffi"
 version = "0.1.0"
 dependencies = [
  "jni-sys 0.3.1",
- "kinora-tunnel",
+ "kinara-tunnel",
  "serde",
  "serde_json",
  "tracing",

@@ -17,20 +17,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"kinora/internal/auth"
-	"kinora/internal/cloud"
-	"kinora/internal/images"
-	"kinora/internal/jobs"
-	"kinora/internal/match"
-	"kinora/internal/metrics"
-	"kinora/internal/pgs"
-	"kinora/internal/remote"
-	"kinora/internal/scanner"
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
-	"kinora/internal/transcode"
-	"kinora/internal/trickplay"
-	"kinora/internal/watch"
+	"kinara/internal/auth"
+	"kinara/internal/cloud"
+	"kinara/internal/images"
+	"kinara/internal/jobs"
+	"kinara/internal/match"
+	"kinara/internal/metrics"
+	"kinara/internal/pgs"
+	"kinara/internal/remote"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
+	"kinara/internal/transcode"
+	"kinara/internal/trickplay"
+	"kinara/internal/watch"
 )
 
 //go:embed templates/*.html
@@ -40,7 +40,7 @@ var templatesFS embed.FS
 var openapiSpec []byte
 
 const (
-	cookieName     = "kinora_session"
+	cookieName     = "kinara_session"
 	sessionTTL     = 90 * 24 * time.Hour
 	sessionRefresh = time.Hour
 )
@@ -100,7 +100,7 @@ type Server struct {
 	// FFprobe is the ffprobe executable ("" for the one on PATH).
 	FFprobe string
 
-	// Remote runs remote access through kinora-iroh (nil: not available).
+	// Remote runs remote access through kinara-iroh (nil: not available).
 	Remote *remote.Sidecar
 	// Cloud links the server to a Kinara account for remote play (nil: off).
 	Cloud *cloud.Manager

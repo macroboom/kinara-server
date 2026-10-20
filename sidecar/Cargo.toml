@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/kinora-tunnel",
-    "crates/kinora-iroh",
-    "crates/kinora-connect",
-    "crates/kinora-testserver",
-    "crates/kinora-e2e",
-    "crates/kinora-tunnel-ffi",
+    "crates/kinara-tunnel",
+    "crates/kinara-iroh",
+    "crates/kinara-connect",
+    "crates/kinara-testserver",
+    "crates/kinara-e2e",
+    "crates/kinara-tunnel-ffi",
 ]
 
 [workspace.package]
@@ -15,8 +15,8 @@ edition = "2021"
 publish = false
 
 [workspace.dependencies]
-kinora-tunnel = { path = "crates/kinora-tunnel" }
-kinora-testserver = { path = "crates/kinora-testserver" }
+kinara-tunnel = { path = "crates/kinara-tunnel" }
+kinara-testserver = { path = "crates/kinara-testserver" }
 
 # iroh is pinned exactly: its API moves between minor releases and we use the
 # unstable net report types, which are outside semver.

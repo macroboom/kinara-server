@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/probe"
-	"kinora/internal/store"
+	"kinara/internal/probe"
+	"kinara/internal/store"
 )
 
 // An "Other videos" library: every file is its own title, named from the

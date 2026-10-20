@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"kinora/internal/auth"
-	"kinora/internal/parse"
-	"kinora/internal/store"
-	"kinora/internal/watch"
+	"kinara/internal/auth"
+	"kinara/internal/parse"
+	"kinara/internal/store"
+	"kinara/internal/watch"
 )
 
 // The built-in web page is for checking that libraries load and match
@@ -160,7 +160,7 @@ func (s *Server) uiHome(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "This server isn't set up yet. Set it up on its home network first.", http.StatusForbidden)
 			return
 		}
-		s.render(w, "setup.html", page{Title: "Set up Kinora", Error: r.URL.Query().Get("err")})
+		s.render(w, "setup.html", page{Title: "Set up Kinara", Error: r.URL.Query().Get("err")})
 		return
 	}
 	a, ok := s.lookup(r, false)
@@ -183,7 +183,7 @@ func (s *Server) uiHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	p := s.basePage(r, "Kinora", a.user)
+	p := s.basePage(r, "Kinara", a.user)
 	for _, l := range libs {
 		if l.Scan != nil && l.Scan.Running {
 			p.Refresh = true

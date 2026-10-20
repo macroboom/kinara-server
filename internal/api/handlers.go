@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"kinora/internal/auth"
-	"kinora/internal/images"
-	"kinora/internal/scanner"
-	"kinora/internal/store"
+	"kinara/internal/auth"
+	"kinara/internal/images"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
 )
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -25,7 +25,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	host, _ := os.Hostname()
 	resp := map[string]any{
 		"ok":        err == nil,
-		"product":   "kinora",
+		"product":   "kinara",
 		"name":      host,
 		"version":   s.Version,
 		"setupDone": n > 0,

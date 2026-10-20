@@ -23,7 +23,7 @@ const (
 	// StateWaiting: turned on, but the server has no admin account yet, so
 	// nothing is opened to the internet (the first-run page would be).
 	StateWaiting  = "waiting"
-	StateMissing  = "missing" // kinora-iroh not found
+	StateMissing  = "missing" // kinara-iroh not found
 	StateStarting = "starting"
 	StateReady    = "ready"
 	StateError    = "error"
@@ -38,10 +38,10 @@ const (
 	keepNotes = 20
 )
 
-// Sidecar starts and supervises kinora-iroh: restarts it with backoff,
+// Sidecar starts and supervises kinara-iroh: restarts it with backoff,
 // reads its status lines, and sends it block commands.
 type Sidecar struct {
-	// Bin is kinora-iroh's path ("" finds it; see FindBinary).
+	// Bin is kinara-iroh's path ("" finds it; see FindBinary).
 	Bin string
 	// DataDir is the server's data folder; the sidecar keeps its key in
 	// <DataDir>/iroh, so the server's address survives restarts.
@@ -164,7 +164,7 @@ func (s *Sidecar) Reload() {
 	want := s.wantedRelays()
 	s.mu.Lock()
 	if s.enabled && s.stop != nil && s.launchedRelays != want {
-		s.Log.Info("remote access: restarting kinora-iroh for new relays", "from", relayLabel(s.launchedRelays), "to", relayLabel(want))
+		s.Log.Info("remote access: restarting kinara-iroh for new relays", "from", relayLabel(s.launchedRelays), "to", relayLabel(want))
 		s.restarts = 0
 		s.stop()
 	}
@@ -279,12 +279,12 @@ func (s *Sidecar) note(code, msg string) {
 	s.mu.Unlock()
 }
 
-// FindBinary finds kinora-iroh: KINORA_IROH, next to the server, or on PATH.
+// FindBinary finds kinara-iroh: KINARA_IROH, next to the server, or on PATH.
 func FindBinary() string {
-	if p := os.Getenv("KINORA_IROH"); p != "" {
+	if p := os.Getenv("KINARA_IROH"); p != "" {
 		return p
 	}
-	name := "kinora-iroh"
+	name := "kinara-iroh"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
@@ -324,7 +324,7 @@ func (s *Sidecar) Run(ctx context.Context) {
 				bin = FindBinary()
 			}
 			if bin == "" {
-				s.setState(StateMissing, "kinora-iroh wasn't found next to the server or on PATH (or set KINORA_IROH).")
+				s.setState(StateMissing, "kinara-iroh wasn't found next to the server or on PATH (or set KINARA_IROH).")
 				wait = time.Minute
 				break
 			}
@@ -342,7 +342,7 @@ func (s *Sidecar) Run(ctx context.Context) {
 			}
 			if code == 2 {
 				// Bad configuration; a restart won't fix it.
-				msg := "kinora-iroh refused its configuration"
+				msg := "kinara-iroh refused its configuration"
 				if err != nil {
 					msg += ": " + err.Error()
 				}
@@ -354,7 +354,7 @@ func (s *Sidecar) Run(ctx context.Context) {
 			if ranFor >= stableRun {
 				backoff = backoffMin
 			}
-			msg := "kinora-iroh stopped"
+			msg := "kinara-iroh stopped"
 			if err != nil {
 				msg += ": " + err.Error()
 			}
@@ -399,10 +399,10 @@ func (s *Sidecar) runOnce(ctx context.Context, bin string, port int) (time.Durat
 		args = append(args, "--block", strings.Join(blocked, ","))
 	}
 	cmd := exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), "KINORA_IROH_SECRET="+s.Secret)
+	cmd.Env = append(os.Environ(), "KINARA_IROH_SECRET="+s.Secret)
 	relays := s.wantedRelays()
 	if relays != "" {
-		cmd.Env = append(cmd.Env, "KINORA_IROH_RELAY_MODE=custom", "KINORA_IROH_RELAY_URLS="+relays)
+		cmd.Env = append(cmd.Env, "KINARA_IROH_RELAY_MODE=custom", "KINARA_IROH_RELAY_URLS="+relays)
 	}
 	hideWindow(cmd)
 	stdin, err := cmd.StdinPipe()
@@ -427,7 +427,7 @@ func (s *Sidecar) runOnce(ctx context.Context, bin string, port int) (time.Durat
 	s.stdin, s.stop, s.started, s.status = stdin, stop, start, nil
 	s.launchedRelays, s.offRelay = relays, 0
 	s.mu.Unlock()
-	s.Log.Info("remote access: started kinora-iroh", "pid", cmd.Process.Pid, "udpPort", port, "blocked", len(blocked), "relays", relayLabel(relays))
+	s.Log.Info("remote access: started kinara-iroh", "pid", cmd.Process.Pid, "udpPort", port, "blocked", len(blocked), "relays", relayLabel(relays))
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -494,7 +494,7 @@ func (s *Sidecar) readEvents(r io.Reader) {
 		line := sc.Bytes()
 		var ev event
 		if err := json.Unmarshal(line, &ev); err != nil {
-			s.Log.Warn("remote access: unreadable line from kinora-iroh", "err", err)
+			s.Log.Warn("remote access: unreadable line from kinara-iroh", "err", err)
 			continue
 		}
 		switch ev.Type {
@@ -519,7 +519,7 @@ func (s *Sidecar) readEvents(r io.Reader) {
 			heal := s.checkRelay(&st)
 			s.mu.Unlock()
 			if heal {
-				s.Log.Warn("remote access: kinora-iroh is on a relay that isn't ours; restarting it", "relay", *st.Relay.URL)
+				s.Log.Warn("remote access: kinara-iroh is on a relay that isn't ours; restarting it", "relay", *st.Relay.URL)
 				s.note("relay_switched_back", "Remote access was using a public relay instead of yours. It was restarted on your relay.")
 				s.Reload()
 			}
@@ -538,6 +538,6 @@ func (s *Sidecar) readLogs(r io.Reader) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 16<<10), 1<<20)
 	for sc.Scan() {
-		s.Log.Debug("kinora-iroh: " + sc.Text())
+		s.Log.Debug("kinara-iroh: " + sc.Text())
 	}
 }

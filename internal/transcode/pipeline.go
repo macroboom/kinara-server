@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 // Where a conversion's video work happens. Each stage is slower but more

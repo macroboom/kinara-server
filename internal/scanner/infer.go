@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"slices"
 
-	"kinora/internal/parse"
-	"kinora/internal/store"
+	"kinara/internal/parse"
+	"kinara/internal/store"
 )
 
 // inferEpisodes places files named with a season but no episode number when

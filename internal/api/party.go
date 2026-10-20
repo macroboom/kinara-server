@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/party"
-	"kinora/internal/store"
+	"kinara/internal/party"
+	"kinara/internal/store"
 )
 
 // Watch parties (see internal/party for how the timing works). Everything

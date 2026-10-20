@@ -16,8 +16,8 @@ import (
 	"strconv"
 	"time"
 
-	"kinora/internal/ffmpeg"
-	"kinora/internal/store"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/store"
 )
 
 const (

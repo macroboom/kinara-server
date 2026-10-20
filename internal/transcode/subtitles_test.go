@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 func TestSubtitlesVTT(t *testing.T) {

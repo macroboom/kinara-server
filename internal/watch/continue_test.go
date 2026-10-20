@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // Movies show in Continue Watching once started (not only after two

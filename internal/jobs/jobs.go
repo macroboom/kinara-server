@@ -13,10 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/ffmpeg"
-	"kinora/internal/intro"
-	"kinora/internal/store"
-	"kinora/internal/trickplay"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/intro"
+	"kinara/internal/store"
+	"kinara/internal/trickplay"
 )
 
 // Worker does the background work.

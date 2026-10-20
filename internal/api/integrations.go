@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // Integrations: outgoing webhooks, incoming hooks and API keys. See the
@@ -140,7 +140,7 @@ func (s *Server) serverIdentity(ctx context.Context) serverRef {
 	}
 	ref.Name, _ = os.Hostname()
 	if ref.Name == "" {
-		ref.Name = "Kinora"
+		ref.Name = "Kinara"
 	}
 	return ref
 }
@@ -333,7 +333,7 @@ var eventCatalogue = []eventDef{
 	{"status.updated", "Incoming updates", "Status changed", "A title's status changed: a new state, or progress moved on.", false},
 	{"status.done", "Incoming updates", "Ready", "An incoming update said a title is ready.", false},
 	{"server.started", "Server", "Started", "The server starts or restarts.", false},
-	{"server.update_available", "Server", "Update available", "A newer version of Kinora is out.", true},
+	{"server.update_available", "Server", "Update available", "A newer version of Kinara is out.", true},
 	{"conversion.failed", "Server", "Conversion failed", "A stream couldn't be converted for a device.", false},
 	{"remote.state_changed", "Server", "Remote access changed", "Remote access connects, disconnects or falls back to the relay.", false},
 }

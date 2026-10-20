@@ -1,6 +1,6 @@
 package remote
 
-// The JSON Lines kinora-iroh writes on stdout (see sidecar/README.md). Only
+// The JSON Lines kinara-iroh writes on stdout (see sidecar/README.md). Only
 // the fields the server uses or shows are listed; others are ignored.
 
 type event struct {

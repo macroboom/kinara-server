@@ -15,23 +15,23 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/auth"
-	"kinora/internal/images"
-	"kinora/internal/probe"
-	"kinora/internal/remote"
-	"kinora/internal/scanner"
-	"kinora/internal/store"
-	"kinora/internal/watch"
+	"kinara/internal/auth"
+	"kinara/internal/images"
+	"kinara/internal/probe"
+	"kinara/internal/remote"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
+	"kinara/internal/watch"
 )
 
 // tunnelServer serves one handler on the home network (an httptest server)
-// and on a tunnel listener, the way kinora-server does.
+// and on a tunnel listener, the way kinara-server does.
 func tunnelServer(t *testing.T, users bool) (st *store.Store, lan string, viaTunnel func(node string) *client) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "kinora.db"))
+	st, err := store.Open(filepath.Join(dir, "kinara.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

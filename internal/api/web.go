@@ -15,7 +15,7 @@ import (
 func (s *Server) webApp() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.WebDir == "" {
-			http.Error(w, "The web app isn't installed on this server. Put its built files in a folder named web next to the server, or set KINORA_WEB.", http.StatusNotFound)
+			http.Error(w, "The web app isn't installed on this server. Put its built files in a folder named web next to the server, or set KINARA_WEB.", http.StatusNotFound)
 			return
 		}
 		rel := strings.TrimPrefix(path.Clean("/"+strings.TrimPrefix(r.URL.Path, "/app")), "/")

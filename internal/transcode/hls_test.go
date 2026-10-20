@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 func TestStartAtBeginning(t *testing.T) {

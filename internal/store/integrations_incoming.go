@@ -11,7 +11,7 @@ import (
 // Incoming hooks: addresses the owner's tools post title statuses to, what
 // each was sent, and the statuses themselves ("on the way").
 
-// StateMapping turns one of a tool's own state words into Kinora's.
+// StateMapping turns one of a tool's own state words into Kinara's.
 type StateMapping struct {
 	From string `json:"from"`
 	To   string `json:"to"`
@@ -23,7 +23,7 @@ type IncomingHook struct {
 	Name    string
 	Token   string
 	Enabled bool
-	// Format is "kinora" or "custom" (read with Mapping and StateMap).
+	// Format is "kinara" or "custom" (read with Mapping and StateMap).
 	Format         string
 	Mapping        map[string]string
 	StateMap       []StateMapping

@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/images"
-	"kinora/internal/pgs"
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
-	"kinora/internal/transcode"
+	"kinara/internal/images"
+	"kinara/internal/pgs"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
+	"kinara/internal/transcode"
 )
 
 // --- Converting streams ---

@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"strconv"
 
-	"kinora/internal/ffmpeg"
-	"kinora/internal/jobs"
-	"kinora/internal/parse"
-	"kinora/internal/store"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/jobs"
+	"kinara/internal/parse"
+	"kinara/internal/store"
 )
 
 // What the web manager needs beyond the browsing API: a library's file

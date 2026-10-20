@@ -18,14 +18,14 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/auth"
-	"kinora/internal/images"
-	"kinora/internal/match"
-	"kinora/internal/probe"
-	"kinora/internal/scanner"
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
-	"kinora/internal/watch"
+	"kinara/internal/auth"
+	"kinara/internal/images"
+	"kinara/internal/match"
+	"kinara/internal/probe"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
+	"kinara/internal/watch"
 )
 
 // fakeTMDB answers like TMDB for two titles.
@@ -138,7 +138,7 @@ func TestEndToEnd(t *testing.T) {
 	makeClip(t, filepath.Join(tvDir, "Small Hours", "Season 1", "Small Hours - S01E02.mkv"))
 	makeClip(t, filepath.Join(moviesDir, "Night Shift (2023)", "Night.Shift.2023.sample.mkv"))
 
-	st, err := store.Open(filepath.Join(dir, "kinora.db"))
+	st, err := store.Open(filepath.Join(dir, "kinara.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

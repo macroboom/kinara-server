@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // ItemView is an item as the apps see it: metadata plus artwork URLs and

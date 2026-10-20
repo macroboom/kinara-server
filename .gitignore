@@ -1,7 +1,7 @@
 # Server data and builds
-/kinora-data/
-/kinora-server
-/kinora-server.exe
+/kinara-data/
+/kinara-server
+/kinara-server.exe
 /tmp/
 
 # SQLite
@@ -16,8 +16,8 @@
 
 # iroh sidecar (Rust): build output and the copied binary
 /sidecar/target/
-/kinora-iroh
-/kinora-iroh.exe
+/kinara-iroh
+/kinara-iroh.exe
 
 # Editors and OS
 .idea/

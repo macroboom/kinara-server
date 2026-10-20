@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 // --- Making DVD subpictures, for the tests ---------------------------------------------

@@ -112,7 +112,7 @@ func (s *Store) BlockedNodes(ctx context.Context) ([]BlockedNode, error) {
 // RemoteSettings are the remote access options, kept apart from Settings
 // because changing them restarts the tunnel.
 type RemoteSettings struct {
-	// Enabled starts kinora-iroh so apps can reach the server from anywhere.
+	// Enabled starts kinara-iroh so apps can reach the server from anywhere.
 	Enabled bool `json:"enabled"`
 	// UDPPort fixes the tunnel's UDP port (IPv4 and IPv6), for a firewall
 	// rule or a port forward. 0 lets it pick.

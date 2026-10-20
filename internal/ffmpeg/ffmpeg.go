@@ -17,11 +17,11 @@ import (
 type Tool struct {
 	// Binary is the ffmpeg executable; "ffmpeg" from PATH if empty.
 	Binary string
-	// HWAccel forces a graphics card backend (KINORA_HWACCEL): "nvenc",
+	// HWAccel forces a graphics card backend (KINARA_HWACCEL): "nvenc",
 	// "qsv", "vaapi", "amf", "videotoolbox", or "none" for the CPU only.
 	// "" or "auto" uses the first that works.
 	HWAccel string
-	// Device is the Linux render node to use (KINORA_HW_DEVICE, e.g.
+	// Device is the Linux render node to use (KINARA_HW_DEVICE, e.g.
 	// /dev/dri/renderD129); "" tries each.
 	Device string
 	Log    *slog.Logger

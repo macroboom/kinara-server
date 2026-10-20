@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"kinora/internal/auth"
-	"kinora/internal/store"
+	"kinara/internal/auth"
+	"kinara/internal/store"
 )
 
 // API keys: let a script use a few endpoints without signing in. A key is

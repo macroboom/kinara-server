@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: Kinora Server API
+  title: Kinara Server API
   version: 0.1.0
   description: |
-    JSON API used by the Kinora apps. Sign in with POST /auth/login and send
+    JSON API used by the Kinara apps. Sign in with POST /auth/login and send
     the returned token as `Authorization: Bearer <token>` on every request.
     Stream and image URLs also accept `?token=<token>` so plain players such
     as VLC can open them.
@@ -282,7 +282,7 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
-                  product: { type: string, description: 'Always "kinora", so apps scanning the network can recognise the server' }
+                  product: { type: string, description: 'Always "kinara", so apps scanning the network can recognise the server' }
                   name: { type: string, description: The computer's name }
                   version: { type: string }
                   setupDone: { type: boolean }
@@ -1495,7 +1495,7 @@ paths:
     post:
       summary: Report on a title on its way (an API key with status:write, or an owner)
       description: >
-        The Kinora format, the same as an incoming hook: tmdbId (with kind),
+        The Kinara format, the same as an incoming hook: tmdbId (with kind),
         tvdbId, imdbId, or title and year; season, episode; state (queued,
         in_progress, done, failed) or progress (0 to 1 or 0 to 100); message;
         eta (seconds); id (your own reference). "done" clears the status and
@@ -1589,7 +1589,7 @@ paths:
     get:
       summary: Incoming hooks (owners, or webhooks:manage)
       responses:
-        "200": { description: '{"items": [Hook]}. Hook: {id, name, token, path, enabled, format: kinora|custom, mapping: {field: path}, stateMap: [{from, to}], progressScale: auto|fraction|percent, onDone: scan|nothing, expireHours, visibility: owners|everyone, lastReceivedAt, createdAt}' }
+        "200": { description: '{"items": [Hook]}. Hook: {id, name, token, path, enabled, format: kinara|custom, mapping: {field: path}, stateMap: [{from, to}], progressScale: auto|fraction|percent, onDone: scan|nothing, expireHours, visibility: owners|everyone, lastReceivedAt, createdAt}' }
     post:
       summary: Add an incoming hook (a token is made)
       responses:

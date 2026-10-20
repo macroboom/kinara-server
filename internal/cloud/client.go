@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// client calls kinora-cloud's API.
+// client calls kinara-cloud's API.
 type client struct {
 	base string
 	hc   *http.Client
@@ -58,7 +58,7 @@ func (c *client) do(ctx context.Context, method, path, token string, in, out any
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	req.Header.Set("User-Agent", "kinora-server")
+	req.Header.Set("User-Agent", "kinara-server")
 	resp, err := c.hc.Do(req)
 	if err != nil {
 		return 0, err
@@ -122,7 +122,7 @@ type presenceOut struct {
 	IrohNode   string   `json:"irohNode"`
 }
 
-// accessClaims is what a cloud access token says (see kinora-cloud's
+// accessClaims is what a cloud access token says (see kinara-cloud's
 // tokens package).
 type accessClaims struct {
 	Type      string `json:"typ"`

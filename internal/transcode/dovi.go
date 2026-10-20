@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/ffmpeg"
-	"kinora/internal/probe"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/probe"
 )
 
 // Dolby Vision when streaming. A Dolby Vision file is HEVC with extra

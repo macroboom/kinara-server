@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 // TextSubtitle reports whether a subtitle codec is text that converts to

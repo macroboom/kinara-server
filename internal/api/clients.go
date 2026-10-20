@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"kinora/internal/auth"
-	"kinora/internal/store"
+	"kinara/internal/auth"
+	"kinara/internal/store"
 )
 
 // Device identity: apps describe themselves when they sign in, so the

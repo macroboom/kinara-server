@@ -1,6 +1,6 @@
 // Package tmdb is a small client for The Movie Database API (v3).
 //
-// The base URL is configurable so the server can later go through a Kinora
+// The base URL is configurable so the server can later go through a Kinara
 // Cloud proxy that holds one commercial key and caches responses.
 package tmdb
 

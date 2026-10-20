@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
 )
 
 // The Discover page: TMDB's lists (trending, new, popular, classics...) in

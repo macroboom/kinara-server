@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
 )
 
 // Titles on their way: statuses from incoming updates, the title they are

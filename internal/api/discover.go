@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
 )
 
 // Titles from TMDB that may not be in the library (trending, later

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // Service records progress and builds Continue Watching.

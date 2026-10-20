@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/store"
-	"kinora/internal/transcode"
+	"kinara/internal/store"
+	"kinara/internal/transcode"
 )
 
 // What's playing now, from the players' progress reports, and the

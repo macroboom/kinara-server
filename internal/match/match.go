@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"strings"
 
-	"kinora/internal/parse"
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
+	"kinara/internal/parse"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
 )
 
 // Threshold is the score an item needs to be matched automatically.

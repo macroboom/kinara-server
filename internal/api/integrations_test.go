@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 func TestSignature(t *testing.T) {
@@ -84,19 +84,19 @@ func TestStateAndProgress(t *testing.T) {
 }
 
 func TestReadUpdates(t *testing.T) {
-	upd, err := readKinora(parseDoc(t, `{"tmdbId":1399,"kind":"show","season":2,"episode":5,"state":"in_progress","progress":0.45,"message":"Copying","eta":600,"id":"job-7"}`), "auto")
+	upd, err := readKinara(parseDoc(t, `{"tmdbId":1399,"kind":"show","season":2,"episode":5,"state":"in_progress","progress":0.45,"message":"Copying","eta":600,"id":"job-7"}`), "auto")
 	if err != nil || upd.TMDBID != 1399 || upd.Kind != "show" || upd.Season != 2 || upd.Episode != 5 ||
 		upd.State != stateInProgress || *upd.Progress != 0.45 || upd.EtaSec != 600 || upd.Ref != "job-7" {
-		t.Fatalf("kinora: %+v %v", upd, err)
+		t.Fatalf("kinara: %+v %v", upd, err)
 	}
 	// Progress decides when there's no state.
-	upd, _ = readKinora(parseDoc(t, `{"title":"Masterplan","year":2026,"progress":100}`), "auto")
+	upd, _ = readKinara(parseDoc(t, `{"title":"Masterplan","year":2026,"progress":100}`), "auto")
 	if upd.State != stateDone || upd.Season != -1 {
 		t.Fatalf("progress 100 is done: %+v", upd)
 	}
 	for _, bad := range []string{`{"tmdbId":1,"kind":"movie","state":"copying"}`, `{"state":"queued"}`,
 		`{"tmdbId":1,"kind":"movie"}`, `{"tmdbId":"abc","state":"queued"}`, `[1,2]`, `{"title":"x","state":"queued","kind":"song"}`} {
-		if _, err := readKinora(parseDoc(t, bad), "auto"); err == nil {
+		if _, err := readKinara(parseDoc(t, bad), "auto"); err == nil {
 			t.Errorf("%s should be refused", bad)
 		}
 	}

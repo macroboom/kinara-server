@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 // A PGS track muxed into an MKV comes back out as a timeline and PNGs, and

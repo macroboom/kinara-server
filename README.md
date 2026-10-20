@@ -1,12 +1,12 @@
-# Kinora Server
+# Kinara Server
 
-The Kinora media server, MVP stage: it scans Movies and TV folders, matches them
+The Kinara media server, MVP stage: it scans Movies and TV folders, matches them
 to TMDB, serves a JSON API for the apps, direct-plays files with seeking, tracks
 progress and the next episode, and has a small built-in web page for checking
 that libraries load correctly.
 
 Not in this version yet: transcoding, profiles, TV pairing, remote access,
-Kinora Cloud. See the architecture plan for the roadmap.
+Kinara Cloud. See the architecture plan for the roadmap.
 
 ## Requirements
 
@@ -22,53 +22,53 @@ Kinora Cloud. See the architecture plan for the roadmap.
 ```sh
 go mod tidy            # fetches the one dependency, modernc.org/sqlite
 cp .env.example .env   # then put your TMDB key in .env
-go run ./cmd/kinora-server
+go run ./cmd/kinara-server
 ```
 
 Settings are read from `.env` in the folder you start the server from
-(`KINORA_ENV_FILE` points somewhere else). Variables already set in your shell
+(`KINARA_ENV_FILE` points somewhere else). Variables already set in your shell
 win over the file. `.env` is git-ignored so your key never gets committed.
 
 Open http://localhost:8420, create the admin account, then add your folders
 under **Add a library** (for example `/media/Movies` as Movies and `/media/TV`
 as TV shows). The first scan starts right away; the page refreshes while it runs.
 
-Pointing Kinora at an existing Plex library is safe: it only reads the media
-folders and keeps its own data in `./kinora-data` (database and image cache).
+Pointing Kinara at an existing Plex library is safe: it only reads the media
+folders and keeps its own data in `./kinara-data` (database and image cache).
 For extra safety, mount the media read-only.
 
 ### Command line
 
 ```sh
-kinora-server                                   # run the server
-kinora-server user add -username alex -admin    # add a user
-kinora-server user passwd -username alex        # change a password
-kinora-server library add -kind movies /media/Movies
-kinora-server library list
-kinora-server scan                              # scan everything now and wait
+kinara-server                                   # run the server
+kinara-server user add -username alex -admin    # add a user
+kinara-server user passwd -username alex        # change a password
+kinara-server library add -kind movies /media/Movies
+kinara-server library list
+kinara-server scan                              # scan everything now and wait
 ```
 
 | Flag | Environment | Default |
 | --- | --- | --- |
-| `-data` | `KINORA_DATA` | `./kinora-data` |
-| `-listen` | `KINORA_LISTEN` | `:8420` |
-| `-tmdb-key` | `KINORA_TMDB_KEY` | none |
-| `-ffprobe` | `KINORA_FFPROBE` | `ffprobe` on PATH |
+| `-data` | `KINARA_DATA` | `./kinara-data` |
+| `-listen` | `KINARA_LISTEN` | `:8420` |
+| `-tmdb-key` | `KINARA_TMDB_KEY` | none |
+| `-ffprobe` | `KINARA_FFPROBE` | `ffprobe` on PATH |
 | `-rescan` | | `6h` (0 turns it off) |
-| `-scan-workers` | `KINORA_SCAN_WORKERS` | by drive type: SSD one per CPU up to 8, hard drive 2, network 6 |
+| `-scan-workers` | `KINARA_SCAN_WORKERS` | by drive type: SSD one per CPU up to 8, hard drive 2, network 6 |
 
 ### Remote play with a Kinara account
 
-Set `KINORA_CLOUD_URL` to the Kinara cloud (`https://cloud.<domain>`), restart,
+Set `KINARA_CLOUD_URL` to the Kinara cloud (`https://cloud.<domain>`), restart,
 then open the manager, **Remote access**, and choose **Link to my Kinara
 account**. Approve the code it shows at the cloud's `/link` page. From then on
 the server:
 
 - reports its addresses to the cloud every minute,
 - opens a port on the router by NAT-PMP or UPnP (or uses the one you
-  forwarded, `KINORA_PUBLIC_PORT`),
+  forwarded, `KINARA_PUBLIC_PORT`),
 - gets a certificate for `*.<server-id>.direct.<domain>` and serves HTTPS on
-  `KINORA_HTTPS_PORT`, so players connect straight to it over IPv6 or IPv4,
+  `KINARA_HTTPS_PORT`, so players connect straight to it over IPv6 or IPv4,
 - keeps a few connections open to the cloud's relay, so players that can't
   connect directly (Roku, browsers away from home) still reach it.
 
@@ -80,12 +80,12 @@ iroh tunnel) can't create accounts or set the server up.
 
 | Environment | Default | Meaning |
 | --- | --- | --- |
-| `KINORA_CLOUD_URL` | none (off) | The Kinara cloud |
-| `KINORA_HTTPS_PORT` | `32443` | Port of the HTTPS listener (0: relay only) |
-| `KINORA_PUBLIC_PORT` | none | A port you forwarded on the router to `KINORA_HTTPS_PORT` |
-| `KINORA_PORT_MAPPING` | `on` | `off` stops UPnP / NAT-PMP |
+| `KINARA_CLOUD_URL` | none (off) | The Kinara cloud |
+| `KINARA_HTTPS_PORT` | `32443` | Port of the HTTPS listener (0: relay only) |
+| `KINARA_PUBLIC_PORT` | none | A port you forwarded on the router to `KINARA_HTTPS_PORT` |
+| `KINARA_PORT_MAPPING` | `on` | `off` stops UPnP / NAT-PMP |
 
-On Windows, allow `kinora-server.exe` through the firewall on the HTTPS port.
+On Windows, allow `kinara-server.exe` through the firewall on the HTTPS port.
 
 ## Dolby Vision and HDR
 
@@ -152,9 +152,9 @@ H.264 High 10 (10-bit H.264), which goes straight to CPU decoding.
 
 Settings:
 
-- `KINORA_HWACCEL`: `auto` (default), `nvenc`, `qsv`, `vaapi`, `amf`,
+- `KINARA_HWACCEL`: `auto` (default), `nvenc`, `qsv`, `vaapi`, `amf`,
   `videotoolbox`, or `none` to use only the CPU.
-- `KINORA_HW_DEVICE`: on Linux, the render node to use
+- `KINARA_HW_DEVICE`: on Linux, the render node to use
   (`/dev/dri/renderD128`); each is tried otherwise. In Docker, pass the
   card in with `--device /dev/dri:/dev/dri` (Intel/AMD) or the NVIDIA
   runtime.
@@ -186,7 +186,7 @@ Scene names (`Night.Shift.2023.1080p.BluRay.mkv`, `Small.Hours.S03E01.mkv`),
 files (`S01E01E02`), and split movies (`cd1`, `part2`) are understood. Samples
 and extras folders are skipped for now.
 
-Anything Kinora can't match shows up under **Needs a look** on the library
+Anything Kinara can't match shows up under **Needs a look** on the library
 page, where you can fix it with the TMDB ID.
 
 ## Requests, Discover and devices
@@ -213,11 +213,11 @@ the library. Both need a TMDB key. See `openapi.yaml` for the shapes.
 Connect your own scripts and tools under Manage > Integrations
 (`/api/v1/integrations/...`, see `openapi.yaml`).
 
-- **Outgoing webhooks.** Kinora posts JSON to your URLs when things happen
+- **Outgoing webhooks.** Kinara posts JSON to your URLs when things happen
   (titles added or removed, scans, playback, accounts, new devices, requests,
   incoming updates, conversions that failed, remote access changes). Each
-  delivery is signed: `X-Kinora-Signature` is `sha256=` and the hex HMAC
-  SHA-256 of `<X-Kinora-Timestamp>.<body>` with the webhook's secret.
+  delivery is signed: `X-Kinara-Signature` is `sha256=` and the hex HMAC
+  SHA-256 of `<X-Kinara-Timestamp>.<body>` with the webhook's secret.
   Deliveries to one webhook go out in order from a queue that survives
   restarts; failures are retried with growing waits (about 1, 5 and 15
   minutes, then 1, 2, 4, 8 and 12 hours, up to the webhook's retry count).
@@ -226,7 +226,7 @@ Connect your own scripts and tools under Manage > Integrations
   webhooks that ask for them.
 - **Incoming hooks.** Each has a secret address
   (`POST /api/v1/hooks/in/<token>`) that your tools post the status of titles
-  on their way to, in the Kinora format or their own JSON mapped field by
+  on their way to, in the Kinara format or their own JSON mapped field by
   field. Titles are matched by TMDB, TVDB or IMDb ID, or title and year. The
   apps show them as "On the way" (`GET /api/v1/ontheway`). "done" clears the
   status and can scan the library. Limits: 2 updates a second per title, 60
@@ -253,7 +253,7 @@ Every mismatch you find in daily use should become a line there.
 ## Layout
 
 ```
-cmd/kinora-server     entry point and command line
+cmd/kinara-server     entry point and command line
 internal/parse        file and folder names to titles, years, episodes
 internal/probe        ffprobe: codecs, HDR, Dolby Vision profile, tracks
 internal/scanner      walks folders, files items, marks missing files

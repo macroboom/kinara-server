@@ -13,9 +13,9 @@ import (
 	"testing"
 	"unicode"
 
-	"kinora/internal/parse"
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
+	"kinara/internal/parse"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
 )
 
 // strictTMDB searches a small catalog the way TMDB does: every word of the

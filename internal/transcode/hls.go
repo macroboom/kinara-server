@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/ffmpeg"
+	"kinara/internal/ffmpeg"
 )
 
 // HLS runs conversions that write HLS (a playlist and fragmented-MP4

@@ -1,5 +1,5 @@
 // Package cloud links this server to a Kinara account and keeps it
-// reachable from anywhere: it reports its addresses to kinora-cloud, opens
+// reachable from anywhere: it reports its addresses to kinara-cloud, opens
 // a port on the router (UPnP or NAT-PMP), gets a certificate for its
 // *.<id>.direct.<domain> names, serves HTTPS with it, and keeps relay
 // connections open for players that can't connect directly (Roku,

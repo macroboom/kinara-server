@@ -1,15 +1,15 @@
-# Kinora remote access sidecar (iroh)
+# Kinara remote access sidecar (iroh)
 
-`kinora-iroh` lets the Kinora apps reach a home server from anywhere without
-port forwarding. It runs next to `kinora-server`, which starts and supervises
+`kinara-iroh` lets the Kinara apps reach a home server from anywhere without
+port forwarding. It runs next to `kinara-server`, which starts and supervises
 it. The same Rust code is the client side the apps will embed later.
 
 ```
  phone / TV app                              home PC
- ExoPlayer, AVPlayer, fetch                  kinora-server (Go)
+ ExoPlayer, AVPlayer, fetch                  kinara-server (Go)
    |  http://127.0.0.1:<port>                  ^  127.0.0.1:8421, PROXY v2 + HTTP/1.1
    v                                           |
- kinora-tunnel client  ==== iroh QUIC ====  kinora-iroh
+ kinara-tunnel client  ==== iroh QUIC ====  kinara-iroh
  (one stream per TCP connection; direct over IPv6 or IPv4, relay as last resort)
 ```
 
@@ -42,8 +42,8 @@ few compile fixes on the first `cargo build`; see "First build" below.
 sidecar/
   Cargo.toml                    workspace, pinned versions, release profile
   rustfmt.toml
-  .cargo/config.toml            static MSVC runtime for kinora-iroh.exe
-  crates/kinora-tunnel/         library: protocol, both ends, config
+  .cargo/config.toml            static MSVC runtime for kinara-iroh.exe
+  crates/kinara-tunnel/         library: protocol, both ends, config
     src/lib.rs                  ALPN, close codes
     src/server.rs               accept loop, per-peer accounting, block, status
     src/client.rs               local listener, lazy connect, reconnect, status
@@ -55,17 +55,17 @@ sidecar/
     src/config.rs               clap flags and env vars for both binaries
     src/keys.rs                 persistent secret key
     src/addr.rs, ratelimit.rs, units.rs, hexutil.rs
-  crates/kinora-iroh/           binary: the sidecar
-  crates/kinora-connect/        binary: test client CLI over the library API
-  crates/kinora-testserver/     binary: stand-in for the Go 8421 listener
-  crates/kinora-e2e/            binary: runs the end-to-end test list
-  crates/kinora-tunnel-ffi/     library for the apps: C ABI (iOS) and JNI (Android)
-    include/kinora_tunnel.h     the C interface
+  crates/kinara-iroh/           binary: the sidecar
+  crates/kinara-connect/        binary: test client CLI over the library API
+  crates/kinara-testserver/     binary: stand-in for the Go 8421 listener
+  crates/kinara-e2e/            binary: runs the end-to-end test list
+  crates/kinara-tunnel-ffi/     library for the apps: C ABI (iOS) and JNI (Android)
+    include/kinara_tunnel.h     the C interface
 ```
 
 ## Protocol
 
-* **ALPN** `kinora/tunnel/1`. The endpoint only offers this ALPN, and the
+* **ALPN** `kinara/tunnel/1`. The endpoint only offers this ALPN, and the
   accept path checks it again.
 * **One iroh connection per device**, one QUIC bidirectional stream per TCP
   connection the app opens. Bytes are copied raw; the sidecar never parses
@@ -92,28 +92,28 @@ sidecar/
 * **When the tunnel cannot carry a request** the client answers the local TCP
   connection with `HTTP/1.1 502 Bad Gateway` and a JSON body
   `{"error":"tunnel_unavailable","message":...}` plus the header
-  `X-Kinora-Tunnel: error`, instead of hanging. The sidecar does the same when
+  `X-Kinara-Tunnel: error`, instead of hanging. The sidecar does the same when
   it cannot reach the Go listener. Apps can tell a tunnel 502 from a server
   502 by that header.
 
-## Contract with kinora-server
+## Contract with kinara-server
 
 ### 1. Launch and supervision
 
 ```
-kinora-iroh --data-dir <KINORA_DATA> --target 127.0.0.1:8421 [--udp-port N] [--block <nodeId>,...]
+kinara-iroh --data-dir <KINARA_DATA> --target 127.0.0.1:8421 [--udp-port N] [--block <nodeId>,...]
 ```
 
 * Pipe stdin, stdout and stderr. stdout is JSON Lines only; stderr is logs.
 * **Closing stdin stops the sidecar** (within about 1.5 s: up to 1 s for open
-  streams, then a bounded close). If kinora-server dies, its end of the pipe
+  streams, then a bounded close). If kinara-server dies, its end of the pipe
   closes and the sidecar exits the same way, so it is never orphaned, also on
   Windows. Ctrl-C, SIGTERM, Ctrl-Break and console close also stop it.
 * Restart it with backoff when it exits (for example 1 s doubling to 30 s,
   reset after a minute of uptime). Exit code 2 means a bad flag or config,
   which a restart will not fix: show the `error` line and stop retrying.
 * Pass blocked devices on the command line (`--block a,b,c`) or in
-  `KINORA_IROH_BLOCK`, so a restart never has an unblocked window.
+  `KINARA_IROH_BLOCK`, so a restart never has an unblocked window.
 * Read stdout with a large line buffer (a status line with many peers can be
   tens of KB; `bufio.Scanner` needs `scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)`).
 
@@ -122,7 +122,7 @@ kinora-iroh --data-dir <KINORA_DATA> --target 127.0.0.1:8421 [--udp-port N] [--b
 Every line is one JSON object with `"type"` and `"v": 1`. Times (`ts`,
 `connectedSince`) are Unix milliseconds. Field names are camelCase. New
 fields may appear without a version bump; renames or removals bump `v`. The
-Rust types in `crates/kinora-tunnel/src/events.rs` are the schema.
+Rust types in `crates/kinara-tunnel/src/events.rs` are the schema.
 
 **ready**, once the endpoint is up and a relay is connected (or after 10 s
 without one, or at once when relays are disabled):
@@ -215,7 +215,7 @@ One JSON object per line:
 
 `block` closes the device's connection at once (close code 2), and the
 handshake hook refuses it from then on; a fresh `status` line follows. Node IDs
-are 64 hex characters. The block list lives in memory only, so kinora-server
+are 64 hex characters. The block list lives in memory only, so kinara-server
 owns the persistent list and passes it with `--block` on every launch.
 
 QUIC close codes the device may see: 0 normal, 1 server shutting down,
@@ -239,7 +239,7 @@ offset  size  field
 ...     TLVs: type(1) length(2, big endian) value
               0xE0  device node ID, 64 lowercase hex ASCII
               0xE1  path type ASCII: direct-v4 | direct-v6 | relay | mixed
-              0xE2  shared secret (only when KINORA_IROH_SECRET is set)
+              0xE2  shared secret (only when KINARA_IROH_SECRET is set)
 ```
 
 * **src** is the device's current UDP address on the direct path (IPv4-mapped
@@ -311,14 +311,14 @@ import (
 
 var proxySig = []byte("\r\n\r\n\x00\r\nQUIT\n")
 
-// TunnelPeer is who a tunnel connection belongs to, from kinora-iroh's PROXY v2 header.
+// TunnelPeer is who a tunnel connection belongs to, from kinara-iroh's PROXY v2 header.
 type TunnelPeer struct {
 	NodeID string       // iroh node ID, 64 lowercase hex chars (TLV 0xE0)
 	Path   string       // direct-v4, direct-v6, relay or mixed (TLV 0xE1)
 	Addr   *net.UDPAddr // device's UDP address on a direct path, nil when relayed
 }
 
-// ReadProxyV2 reads the header kinora-iroh writes first on every connection to 8421.
+// ReadProxyV2 reads the header kinara-iroh writes first on every connection to 8421.
 func ReadProxyV2(r *bufio.Reader) (*TunnelPeer, error) {
 	hdr := make([]byte, 16)
 	if _, err := io.ReadFull(r, hdr); err != nil {
@@ -384,7 +384,7 @@ import (
 )
 
 // tunnelListener wraps the loopback 8421 listener. Every connection must
-// start with kinora-iroh's PROXY v2 header; anything else is dropped.
+// start with kinara-iroh's PROXY v2 header; anything else is dropped.
 type tunnelListener struct{ net.Listener }
 
 type tunnelConn struct {
@@ -433,7 +433,7 @@ func PeerFrom(r *http.Request) *TunnelPeer {
 	return p
 }
 
-// ServeTunnel runs the same handler on 127.0.0.1:8421 for kinora-iroh. Bind loopback only:
+// ServeTunnel runs the same handler on 127.0.0.1:8421 for kinara-iroh. Bind loopback only:
 // anyone who can reach this port can claim any node ID.
 func ServeTunnel(handler http.Handler) error {
 	ln, err := net.Listen("tcp", "127.0.0.1:8421")
@@ -466,7 +466,7 @@ Two Go `net/http` behaviours to keep in mind for tunnel traffic:
 
 ## Go-side changes (checklist)
 
-**Status: done in kinora-server 0032** (`internal/remote`, `internal/qr`,
+**Status: done in kinara-server 0032** (`internal/remote`, `internal/qr`,
 `internal/api/remote.go`, migration `0007_remote.sql`, Manage → Remote access
 in the web app). On top of the list below it also: never starts the sidecar
 before an admin account exists and refuses the first-run setup page over the
@@ -476,8 +476,8 @@ the 0xE2 secret on every connection. The snippets above are the reference
 the Go code follows.
 
 1. **Spawn and supervise.** At startup, if remote access is enabled, start
-   `kinora-iroh` (next to the server binary: `kinora-iroh.exe` on Windows)
-   with `--data-dir <KINORA_DATA> --target 127.0.0.1:8421 --block <persisted list>`.
+   `kinara-iroh` (next to the server binary: `kinara-iroh.exe` on Windows)
+   with `--data-dir <KINARA_DATA> --target 127.0.0.1:8421 --block <persisted list>`.
    Keep the stdin pipe open for the sidecar's lifetime and close it to stop.
    Read stdout line by line into a `remoteState` struct guarded by a mutex,
    forward stderr into the server log, restart with backoff. On server
@@ -518,26 +518,26 @@ Every flag has an environment variable. Sizes accept `K`, `M`, `G` (binary).
 
 | Flag | Env | Default | Meaning |
 |---|---|---|---|
-| `--data-dir` | `KINORA_IROH_DATA_DIR` | required | key at `<dir>/iroh/secret.key` |
-| `--target` | `KINORA_IROH_TARGET` | `127.0.0.1:8421` | Go PROXY listener |
-| `--udp-port` | `KINORA_IROH_UDP_PORT` | iroh picks | fixed UDP port, IPv4 and IPv6 |
-| `--relay-mode` | `KINORA_IROH_RELAY_MODE` | `default` | `default`, `disabled`, `custom` |
-| `--relay-url` (repeat) | `KINORA_IROH_RELAY_URLS` (comma list) | | self-hosted `iroh-relay` URLs for `custom` |
-| `--no-discovery-n0` | `KINORA_IROH_NO_DISCOVERY_N0` | off | no n0 DNS/pkarr publish or lookup |
-| `--no-mdns` | `KINORA_IROH_NO_MDNS` | off | no LAN discovery |
-| `--status-interval-secs` | `KINORA_IROH_STATUS_INTERVAL_SECS` | 5 | periodic status lines |
-| `--max-streams-per-peer` | `KINORA_IROH_MAX_STREAMS_PER_PEER` | 64 | concurrent TCP connections per device |
-| `--max-conns-per-minute` | `KINORA_IROH_MAX_CONNS_PER_MINUTE` | 30 | new connections per device per minute, 0 = off |
-| `--max-handshakes-per-minute` | `KINORA_IROH_MAX_HANDSHAKES_PER_MINUTE` | 120 | new connections from all devices together per minute, 0 = off (a new node ID costs nothing, so the per-device limit alone can be dodged) |
-| (env only) | `KINORA_IROH_SECRET` | | sent as TLV 0xE2 in every PROXY header; kinora-server sets a fresh random one each launch and drops connections without it, so other local programs can't pose as the sidecar |
-| `--stream-window` | `KINORA_IROH_STREAM_WINDOW` | `4M` | per-stream receive window |
-| `--connection-window` | `KINORA_IROH_CONNECTION_WINDOW` | `16M` | per-connection receive window |
-| `--send-window` | `KINORA_IROH_SEND_WINDOW` | `16M` | per-connection send buffer |
-| `--idle-timeout-secs` | `KINORA_IROH_IDLE_TIMEOUT_SECS` | 60 | |
-| `--keepalive-secs` | `KINORA_IROH_KEEPALIVE_SECS` | 15 | must be below the idle timeout |
-| `--block` (repeat) | `KINORA_IROH_BLOCK` (comma list) | | node IDs refused from the start |
-| `--shutdown-grace-ms` | `KINORA_IROH_SHUTDOWN_GRACE_MS` | 1000 | wait for open streams on shutdown |
-| `--log-level` | `KINORA_IROH_LOG` | info, iroh at warn | tracing filter for stderr |
+| `--data-dir` | `KINARA_IROH_DATA_DIR` | required | key at `<dir>/iroh/secret.key` |
+| `--target` | `KINARA_IROH_TARGET` | `127.0.0.1:8421` | Go PROXY listener |
+| `--udp-port` | `KINARA_IROH_UDP_PORT` | iroh picks | fixed UDP port, IPv4 and IPv6 |
+| `--relay-mode` | `KINARA_IROH_RELAY_MODE` | `default` | `default`, `disabled`, `custom` |
+| `--relay-url` (repeat) | `KINARA_IROH_RELAY_URLS` (comma list) | | self-hosted `iroh-relay` URLs for `custom` |
+| `--no-discovery-n0` | `KINARA_IROH_NO_DISCOVERY_N0` | off | no n0 DNS/pkarr publish or lookup |
+| `--no-mdns` | `KINARA_IROH_NO_MDNS` | off | no LAN discovery |
+| `--status-interval-secs` | `KINARA_IROH_STATUS_INTERVAL_SECS` | 5 | periodic status lines |
+| `--max-streams-per-peer` | `KINARA_IROH_MAX_STREAMS_PER_PEER` | 64 | concurrent TCP connections per device |
+| `--max-conns-per-minute` | `KINARA_IROH_MAX_CONNS_PER_MINUTE` | 30 | new connections per device per minute, 0 = off |
+| `--max-handshakes-per-minute` | `KINARA_IROH_MAX_HANDSHAKES_PER_MINUTE` | 120 | new connections from all devices together per minute, 0 = off (a new node ID costs nothing, so the per-device limit alone can be dodged) |
+| (env only) | `KINARA_IROH_SECRET` | | sent as TLV 0xE2 in every PROXY header; kinara-server sets a fresh random one each launch and drops connections without it, so other local programs can't pose as the sidecar |
+| `--stream-window` | `KINARA_IROH_STREAM_WINDOW` | `4M` | per-stream receive window |
+| `--connection-window` | `KINARA_IROH_CONNECTION_WINDOW` | `16M` | per-connection receive window |
+| `--send-window` | `KINARA_IROH_SEND_WINDOW` | `16M` | per-connection send buffer |
+| `--idle-timeout-secs` | `KINARA_IROH_IDLE_TIMEOUT_SECS` | 60 | |
+| `--keepalive-secs` | `KINARA_IROH_KEEPALIVE_SECS` | 15 | must be below the idle timeout |
+| `--block` (repeat) | `KINARA_IROH_BLOCK` (comma list) | | node IDs refused from the start |
+| `--shutdown-grace-ms` | `KINARA_IROH_SHUTDOWN_GRACE_MS` | 1000 | wait for open streams on shutdown |
+| `--log-level` | `KINARA_IROH_LOG` | info, iroh at warn | tracing filter for stderr |
 
 Self-hosting a relay later: run `iroh-relay` on a VPS, then
 `--relay-mode custom --relay-url https://relay.example.com`. The apps need
@@ -549,7 +549,7 @@ inherited permissions are removed and only the current user gets access
 (through `icacls`; if that fails it keeps the data folder's ACL and logs a
 warning). An unreadable key is a startup error, never silently replaced,
 because a new key changes the node ID and unpairs every device. Back the file
-up with the rest of `KINORA_DATA`.
+up with the rest of `KINARA_DATA`.
 
 **Firewall and ports.** Without `--udp-port`, iroh picks a port each run and
 relies on hole punching. A fixed port lets you add one firewall rule (and an
@@ -557,7 +557,7 @@ optional forward) and makes direct paths come back faster after a restart. On
 Windows, allow the program on first run, or:
 
 ```powershell
-New-NetFirewallRule -DisplayName "Kinora remote (UDP)" -Direction Inbound -Program "C:\Kinora\kinora-iroh.exe" -Protocol UDP -Action Allow
+New-NetFirewallRule -DisplayName "Kinara remote (UDP)" -Direction Inbound -Program "C:\Kinara\kinara-iroh.exe" -Protocol UDP -Action Allow
 ```
 
 ## Building
@@ -582,9 +582,9 @@ cargo build --release --workspace
    cd sidecar
    cargo build --release --workspace
    cargo test --workspace
-   .\target\release\kinora-e2e.exe
+   .\target\release\kinara-e2e.exe
    ```
-3. Ship `target\release\kinora-iroh.exe` next to `kinora-server.exe`.
+3. Ship `target\release\kinara-iroh.exe` next to `kinara-server.exe`.
    `.cargo/config.toml` links the C runtime statically, so no redistributable
    is needed.
 
@@ -592,22 +592,22 @@ cargo build --release --workspace
 
 ```sh
 cargo install cross
-cross build --release --target aarch64-unknown-linux-gnu -p kinora-iroh
+cross build --release --target aarch64-unknown-linux-gnu -p kinara-iroh
 ```
 
 or with zig: `cargo install cargo-zigbuild` then
-`cargo zigbuild --release --target aarch64-unknown-linux-gnu -p kinora-iroh`
+`cargo zigbuild --release --target aarch64-unknown-linux-gnu -p kinara-iroh`
 (after `rustup target add aarch64-unknown-linux-gnu`).
 
 **macOS** (universal binary):
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
-cargo build --release -p kinora-iroh --target aarch64-apple-darwin
-cargo build --release -p kinora-iroh --target x86_64-apple-darwin
-lipo -create -output kinora-iroh \
-  target/aarch64-apple-darwin/release/kinora-iroh \
-  target/x86_64-apple-darwin/release/kinora-iroh
+cargo build --release -p kinara-iroh --target aarch64-apple-darwin
+cargo build --release -p kinara-iroh --target x86_64-apple-darwin
+lipo -create -output kinara-iroh \
+  target/aarch64-apple-darwin/release/kinara-iroh \
+  target/x86_64-apple-darwin/release/kinara-iroh
 ```
 
 ### First build
@@ -630,7 +630,7 @@ Two things only a run can confirm:
   on the same Wi-Fi never finds the server without the relay, move it into the
   builder with `.address_lookup(MdnsAddressLookup::builder())` before `bind()`.
 * **`--udp-port`** binds `0.0.0.0:port` and `[::]:port` separately. Run
-  `kinora-e2e --udp-port 7777` once on each OS to confirm the two binds do not
+  `kinara-e2e --udp-port 7777` once on each OS to confirm the two binds do not
   clash.
 
 ## Tests
@@ -651,15 +651,15 @@ parsing, and the test file generator.
 
 ```sh
 cargo build --release --workspace
-target/release/kinora-e2e                 # quick run
-target/release/kinora-e2e --long-secs 180 # adds the multi-minute chunked stream
-target/release/kinora-e2e --udp-port 7777 # sidecar with a fixed port
-target/release/kinora-e2e --skip-relay    # offline machine
+target/release/kinara-e2e                 # quick run
+target/release/kinara-e2e --long-secs 180 # adds the multi-minute chunked stream
+target/release/kinara-e2e --udp-port 7777 # sidecar with a fixed port
+target/release/kinara-e2e --skip-relay    # offline machine
 ```
 
-It starts `kinora-testserver` on 127.0.0.1:18421 (parses PROXY v2; serves a
+It starts `kinara-testserver` on 127.0.0.1:18421 (parses PROXY v2; serves a
 seeded virtual file with Range support, a slow chunked endpoint, an echo of the
-PROXY TLVs, and an upload checksum), then `kinora-iroh` and `kinora-connect`,
+PROXY TLVs, and an upload checksum), then `kinara-iroh` and `kinara-connect`,
 and runs:
 
 | # | Test | Pass condition |
@@ -682,17 +682,17 @@ Logs and keys go to a temp folder that is removed on success (kept with
 
 **What one machine cannot show.** Loopback and LAN addresses prove the
 mechanics of direct paths, not hole punching across real NATs, and `::1` says
-nothing about global IPv6. For that: run `kinora-iroh` at home, then on a
+nothing about global IPv6. For that: run `kinara-iroh` at home, then on a
 laptop tethered to a phone (cellular usually has IPv6), run
-`kinora-connect <ticket> --status` and watch `path` go from `relay` to
+`kinara-connect <ticket> --status` and watch `path` go from `relay` to
 `direct-v6`.
 
 ### Manual checks
 
 ```sh
-target/release/kinora-testserver --listen 127.0.0.1:8421 --verbose &
-target/release/kinora-iroh --data-dir ./data            # prints ready with the ticket
-target/release/kinora-connect <ticket> --port 18080 --status
+target/release/kinara-testserver --listen 127.0.0.1:8421 --verbose &
+target/release/kinara-iroh --data-dir ./data            # prints ready with the ticket
+target/release/kinara-connect <ticket> --port 18080 --status
 curl -s http://127.0.0.1:18080/echo
 curl -r 0-99 http://127.0.0.1:18080/file | xxd | head
 curl --limit-rate 2M -o /dev/null http://127.0.0.1:18080/file
@@ -701,7 +701,7 @@ curl -N "http://127.0.0.1:18080/slow?secs=600&kbps=512" -o /dev/null
 
 ## Client library
 
-The apps use the same crate through `kinora_tunnel::TunnelClient`:
+The apps use the same crate through `kinara_tunnel::TunnelClient`:
 
 ```rust
 let mut cfg = ClientConfig::new(ticket_or_node_id, app_data_dir);
@@ -721,44 +721,44 @@ tunnel.stop();                                 // idempotent, any thread
   `Vec` and plain structs, plus one error enum, so uniffi can wrap it as is.
   The handle owns its own small tokio runtime.
 
-### The apps: kinora-tunnel-ffi
+### The apps: kinara-tunnel-ffi
 
-`crates/kinora-tunnel-ffi` wraps `TunnelClient` for the Kinara apps. Instead
+`crates/kinara-tunnel-ffi` wraps `TunnelClient` for the Kinara apps. Instead
 of uniffi (which needs a code generation step and JNA), it has two small
 hand-written bindings over one JSON API (`src/api.rs`):
 
-* `src/c.rs`: a C ABI, declared in `include/kinora_tunnel.h`, for Swift.
+* `src/c.rs`: a C ABI, declared in `include/kinara_tunnel.h`, for Swift.
 * `src/android.rs`: JNI entry points for the Kotlin object
-  `expo.modules.kinoratunnel.TunnelNative` in the app's
-  `modules/kinora-tunnel`. The function names spell out that package, class
+  `expo.modules.kinaratunnel.TunnelNative` in the app's
+  `modules/kinara-tunnel`. The function names spell out that package, class
   and method names; rename both sides together.
 
 Calls: start (JSON settings in; handle, port, url and node ID out), status
 (the `ClientStatus` fields plus "ok"), network change, stop, stop all, and
 drain logs (log lines kept in memory, since phones have no console; the
-Android module copies them to Logcat under the tag `KinoraTunnel`). Every
+Android module copies them to Logcat under the tag `KinaraTunnel`). Every
 answer is JSON with "ok": true, or "ok": false and "error". Non-ASCII is
 written as `\uXXXX`, so the same bytes are valid UTF-8 and Java's modified
 UTF-8. Panics are caught and become error answers.
 
 Settings: `server` (ticket or node ID), `dataDir` (the Android module fills
-it in: the app's files folder plus `kinora-tunnel`, where the device key
+it in: the app's files folder plus `kinara-tunnel`, where the device key
 lives so its node ID stays the same), `relayUrls` (the Kinara relay from
-kinora-cloud; a non-empty list means custom relays), `relayOnly`,
+kinara-cloud; a non-empty list means custom relays), `relayOnly`,
 `discoveryN0`, `mdns`, `localPort`, `connectTimeoutMs`.
 
-It depends on `kinora-tunnel` by path with `default-features = false,
+It depends on `kinara-tunnel` by path with `default-features = false,
 features = ["mdns"]`, not through the workspace, so clap stays out of the
 app.
 
-**Android build.** The app runs it: `npm run tunnel` in kinora-app calls
+**Android build.** The app runs it: `npm run tunnel` in kinara-app calls
 
 ```
-cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o <app>/modules/kinora-tunnel/android/src/main/jniLibs --platform 24 build -p kinora-tunnel-ffi --release
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o <app>/modules/kinara-tunnel/android/src/main/jniLibs --platform 24 build -p kinara-tunnel-ffi --release
 ```
 
 with this folder as the working directory (it looks for
-`../kinora-server/sidecar` next to the app, or `KINORA_SIDECAR`).
+`../kinara-server/sidecar` next to the app, or `KINARA_SIDECAR`).
 `.cargo/config.toml` adds 16 KB page alignment for the Android targets,
 which Google Play requires for apps targeting Android 15 and later.
 
@@ -770,7 +770,7 @@ CHANGE_WIFI_MULTICAST_STATE (a multicast lock while a tunnel runs, for mDNS).
 **iOS (not done yet).** Plan: build the staticlib for `aarch64-apple-ios`
 and `aarch64-apple-ios-sim` in an EAS `eas-build-pre-install` hook (Rust
 installed on the EAS Mac), make an xcframework with
-`include/kinora_tunnel.h`, and add a Swift side to the Expo module that
+`include/kinara_tunnel.h`, and add a Swift side to the Expo module that
 calls the C functions. iOS settings: `NSAllowsLocalNetworking` (already set
 by the app), `NSLocalNetworkUsageDescription` (already set), and the
 Bonjour type iroh's mDNS uses (service name `irohv1`; confirm the exact type

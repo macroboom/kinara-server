@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 func eps() []store.EpisodeRef {

@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"kinora/internal/scanner"
-	"kinora/internal/store"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
 )
 
 // scanFolder scans one folder of a library: POST

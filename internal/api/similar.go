@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
 )
 
 // "More like this" under a title: TMDB's recommendations for it, each

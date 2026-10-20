@@ -14,13 +14,13 @@ import (
 	"sync"
 	"testing"
 
-	"kinora/internal/auth"
-	"kinora/internal/images"
-	"kinora/internal/probe"
-	"kinora/internal/scanner"
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
-	"kinora/internal/watch"
+	"kinara/internal/auth"
+	"kinara/internal/images"
+	"kinara/internal/probe"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
+	"kinara/internal/watch"
 )
 
 // discoverTMDB is a fake TMDB for requests and discovery: movie 1 (also in
@@ -92,7 +92,7 @@ func requestServer(t *testing.T) (*store.Store, store.Library, *discoverTMDB, fu
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "kinora.db"))
+	st, err := store.Open(filepath.Join(dir, "kinara.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

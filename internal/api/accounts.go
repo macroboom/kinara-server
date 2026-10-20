@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 
-	"kinora/internal/auth"
-	"kinora/internal/store"
+	"kinara/internal/auth"
+	"kinara/internal/store"
 )
 
 // Local accounts: the sign-in screen can list them (if the owner allows)

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // Lists belong to the profile watching on this session: "My List" (made on

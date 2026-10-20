@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"kinora/internal/scanner"
-	"kinora/internal/store"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
 )
 
 // TestTemplatesRender executes every page with sample data, so template
@@ -40,7 +40,7 @@ func TestTemplatesRender(t *testing.T) {
 	pages := map[string]page{
 		"setup.html": {Title: "Set up", Error: "oops"},
 		"login.html": {Title: "Sign in"},
-		"dashboard.html": {Title: "Kinora", User: admin, Warnings: []string{"No TMDB key"}, Message: "hi",
+		"dashboard.html": {Title: "Kinara", User: admin, Warnings: []string{"No TMDB key"}, Message: "hi",
 			Data: map[string]any{
 				"Libraries": []libraryView{{Library: lib, Stats: store.LibraryStats{Movies: 5, Unmatched: 1, Files: 6}, Scan: &scan}},
 				"Recent":    []store.Item{movie},

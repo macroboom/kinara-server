@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 const (

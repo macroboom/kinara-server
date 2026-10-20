@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"kinora/internal/ffmpeg"
-	"kinora/internal/probe"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/probe"
 )
 
 // dvFile makes a stand-in file and marks it as one the strip check passed

@@ -653,8 +653,8 @@ func startChild() {
 	}
 	cmd := exec.Command(filepath.Join(app.exeDir, "kinara-server.exe"), "serve")
 	cmd.Env = append(os.Environ(),
-		"KINORA_ENV_FILE="+filepath.Join(app.dataDir, "kinara.env"),
-		"KINORA_STOP_ON_EOF=1")
+		"KINARA_ENV_FILE="+filepath.Join(app.dataDir, "kinara.env"),
+		"KINARA_STOP_ON_EOF=1")
 	cmd.Dir = app.dataDir
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000} // CREATE_NO_WINDOW
 	if err := os.MkdirAll(filepath.Join(app.dataDir, "logs"), 0o755); err == nil {
@@ -765,7 +765,7 @@ func regString(name, fallback string) string {
 	return fallback
 }
 
-// listenPort reads KINORA_LISTEN from the settings file. In service mode
+// listenPort reads KINARA_LISTEN from the settings file. In service mode
 // that file is readable only by admins (it sits beside the database), so
 // otherwise it's the port the installer recorded.
 func listenPort(envFile string) string {
@@ -779,7 +779,7 @@ func portFromEnv(text string) string {
 	port := "8420"
 	for _, line := range strings.Split(text, "\n") {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok || strings.TrimSpace(k) != "KINORA_LISTEN" {
+		if !ok || strings.TrimSpace(k) != "KINARA_LISTEN" {
 			continue
 		}
 		v = strings.Trim(strings.TrimSpace(v), `"'`)

@@ -23,9 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"kinora/internal/ffmpeg"
-	"kinora/internal/probe"
-	"kinora/internal/store"
+	"kinara/internal/ffmpeg"
+	"kinara/internal/probe"
+	"kinara/internal/store"
 )
 
 // Request says what to make.

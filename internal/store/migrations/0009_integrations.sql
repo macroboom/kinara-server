@@ -58,7 +58,7 @@ CREATE TABLE integ_incoming (
     name             TEXT    NOT NULL,
     token            TEXT    NOT NULL UNIQUE,
     enabled          INTEGER NOT NULL DEFAULT 1,
-    format           TEXT    NOT NULL DEFAULT 'kinora',
+    format           TEXT    NOT NULL DEFAULT 'kinara',
     mapping          TEXT    NOT NULL DEFAULT '{}',
     state_map        TEXT    NOT NULL DEFAULT '[]',
     progress_scale   TEXT    NOT NULL DEFAULT 'auto',

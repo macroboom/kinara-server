@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // The pulse is how the apps stay current without a connection held open:

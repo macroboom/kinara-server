@@ -22,7 +22,7 @@ import (
 
 // Settings come from the environment (see main).
 type Settings struct {
-	// CloudURL is kinora-cloud's API, "https://cloud.<domain>". Empty turns
+	// CloudURL is kinara-cloud's API, "https://cloud.<domain>". Empty turns
 	// the cloud off.
 	CloudURL string
 	// DataDir is the server's data folder; state lives in <DataDir>/cloud.
@@ -227,7 +227,7 @@ func (m *Manager) Status() LinkStatus {
 // the account's owner will sign in as.
 func (m *Manager) StartLink(ctx context.Context, userID int64) (LinkStatus, error) {
 	if !m.Enabled() {
-		return LinkStatus{}, errors.New("this server has no cloud address set (KINORA_CLOUD_URL)")
+		return LinkStatus{}, errors.New("this server has no cloud address set (KINARA_CLOUD_URL)")
 	}
 	if m.State() != nil {
 		return m.Status(), errors.New("already linked; unlink first")
@@ -678,7 +678,7 @@ func (m *Manager) relayOnce(ctx context.Context, ln *relayListener) error {
 	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
 	req.Header.Set("Authorization", "Bearer "+st.ServerSecret)
 	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "kinora-relay")
+	req.Header.Set("Upgrade", "kinara-relay")
 	// A plain transport, so the connection can be taken over after 101.
 	tr := &http.Transport{Proxy: nil, ForceAttemptHTTP2: false, TLSClientConfig: &tls.Config{NextProtos: []string{"http/1.1"}}}
 	if m.HTTPClient != nil {

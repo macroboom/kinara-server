@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"kinora/internal/qr"
-	"kinora/internal/remote"
-	"kinora/internal/store"
+	"kinara/internal/qr"
+	"kinara/internal/remote"
+	"kinara/internal/store"
 )
 
 // noteNode records the node ID a session uses through the tunnel, so the

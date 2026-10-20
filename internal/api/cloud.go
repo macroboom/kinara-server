@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"kinora/internal/auth"
-	"kinora/internal/cloud"
-	"kinora/internal/remote"
-	"kinora/internal/store"
+	"kinara/internal/auth"
+	"kinara/internal/cloud"
+	"kinara/internal/remote"
+	"kinara/internal/store"
 )
 
 // fromInternet: the request came from outside the home network, through
@@ -31,7 +31,7 @@ func (s *Server) cloudStatus(w http.ResponseWriter, r *http.Request, u store.Use
 // who starts it is who the Kinara account signs in as.
 func (s *Server) cloudLink(w http.ResponseWriter, r *http.Request, u store.User) {
 	if s.Cloud == nil || !s.Cloud.Enabled() {
-		writeErr(w, http.StatusNotImplemented, "remote access through a Kinara account isn't set up on this server (KINORA_CLOUD_URL)")
+		writeErr(w, http.StatusNotImplemented, "remote access through a Kinara account isn't set up on this server (KINARA_CLOUD_URL)")
 		return
 	}
 	st, err := s.Cloud.StartLink(r.Context(), u.ID)

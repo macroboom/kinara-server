@@ -1,4 +1,4 @@
-// Package remote runs remote access: it supervises the kinora-iroh sidecar
+// Package remote runs remote access: it supervises the kinara-iroh sidecar
 // (which carries apps' connections over iroh from anywhere) and serves the
 // tunnel listener those connections arrive on.
 package remote
@@ -15,7 +15,7 @@ import (
 
 var proxySig = []byte("\r\n\r\n\x00\r\nQUIT\n")
 
-// PROXY v2 TLVs kinora-iroh writes.
+// PROXY v2 TLVs kinara-iroh writes.
 const (
 	tlvNodeID = 0xE0
 	tlvPath   = 0xE1
@@ -38,7 +38,7 @@ var (
 	errBadSecret = errors.New("proxy: missing or wrong tunnel secret")
 )
 
-// ReadProxyV2 reads the header kinora-iroh writes first on every
+// ReadProxyV2 reads the header kinara-iroh writes first on every
 // connection. With a secret set, the header must carry it, so other
 // programs on this computer can't pose as the sidecar.
 func ReadProxyV2(r *bufio.Reader, secret string) (*Peer, error) {
@@ -134,7 +134,7 @@ func PeerFrom(ctx context.Context) *Peer {
 	return p
 }
 
-// RelayedHeader is the PROXY v2 header kinora-iroh writes for a device on
+// RelayedHeader is the PROXY v2 header kinara-iroh writes for a device on
 // a relayed path (no address). For tests and tools that stand in for the
 // sidecar.
 func RelayedHeader(nodeID, secret string) []byte {

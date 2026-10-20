@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // Outgoing webhook endpoints (owners, or a key with webhooks:manage).
@@ -73,7 +73,7 @@ func webhookViewOf(h store.Webhook, last *store.Attempt) webhookView {
 // deliveryView is one try at a delivery, for the log.
 type deliveryView struct {
 	ID int64 `json:"id"`
-	// DeliveryID is the X-Kinora-Delivery header (the same for every try).
+	// DeliveryID is the X-Kinara-Delivery header (the same for every try).
 	DeliveryID string  `json:"deliveryId"`
 	At         int64   `json:"at"`
 	Event      string  `json:"event"`
@@ -117,7 +117,7 @@ func readJSONLoose(r *http.Request, v any) error {
 
 var reHeaderName = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+.^_|~-]{1,64}$`)
 
-// reservedHeaders are set by Kinora on every delivery.
+// reservedHeaders are set by Kinara on every delivery.
 var reservedHeaders = map[string]bool{"content-type": true, "content-length": true, "host": true,
 	"user-agent": true, "transfer-encoding": true, "connection": true}
 
@@ -215,7 +215,7 @@ func checkWebhook(h *store.Webhook) error {
 	events := []string{}
 	for _, e := range h.Events {
 		if !knownEvent(e) {
-			return fmt.Errorf("%q isn't an event Kinora sends", e)
+			return fmt.Errorf("%q isn't an event Kinara sends", e)
 		}
 		if !seen[e] {
 			seen[e] = true
@@ -242,8 +242,8 @@ func checkWebhook(h *store.Webhook) error {
 		if !reHeaderName.MatchString(hd.Name) {
 			return fmt.Errorf("%q can't be a header name", hd.Name)
 		}
-		if reservedHeaders[lower] || strings.HasPrefix(lower, "x-kinora-") {
-			return fmt.Errorf("Kinora sets the %s header itself", hd.Name)
+		if reservedHeaders[lower] || strings.HasPrefix(lower, "x-kinara-") {
+			return fmt.Errorf("Kinara sets the %s header itself", hd.Name)
 		}
 		if strings.ContainsAny(hd.Value, "\r\n") || len(hd.Value) > 4096 {
 			return fmt.Errorf("the value of %s must be one line, up to 4096 characters", hd.Name)
@@ -381,7 +381,7 @@ func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request, u store.Use
 	s.integ.mu.Lock()
 	server := s.integ.server
 	s.integ.mu.Unlock()
-	data, _ := json.Marshal(map[string]any{"message": "This is a test from Kinora. If you can read this, the webhook works."})
+	data, _ := json.Marshal(map[string]any{"message": "This is a test from Kinara. If you can read this, the webhook works."})
 	id := newDeliveryID()
 	body, _ := marshalEnvelope(envelope{ID: id, Event: "test", OccurredAt: time.Now().UTC().Format(time.RFC3339),
 		Server: server, Data: data})

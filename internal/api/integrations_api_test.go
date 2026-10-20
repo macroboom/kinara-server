@@ -18,13 +18,13 @@ import (
 	"testing"
 	"time"
 
-	"kinora/internal/auth"
-	"kinora/internal/images"
-	"kinora/internal/probe"
-	"kinora/internal/scanner"
-	"kinora/internal/store"
-	"kinora/internal/tmdb"
-	"kinora/internal/watch"
+	"kinara/internal/auth"
+	"kinara/internal/images"
+	"kinara/internal/probe"
+	"kinara/internal/scanner"
+	"kinara/internal/store"
+	"kinara/internal/tmdb"
+	"kinara/internal/watch"
 )
 
 type integEnv struct {
@@ -43,7 +43,7 @@ func integServer(t *testing.T) *integEnv {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "kinora.db"))
+	st, err := store.Open(filepath.Join(dir, "kinara.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func (rc *receiver) wait(t *testing.T, event string) (*http.Request, []byte) {
 	for range 250 {
 		rc.mu.Lock()
 		for i, r := range rc.got {
-			if r.Header.Get("X-Kinora-Event") == event {
+			if r.Header.Get("X-Kinara-Event") == event {
 				rc.mu.Unlock()
 				return r, rc.body[i]
 			}
@@ -160,12 +160,12 @@ func TestWebhookDelivery(t *testing.T) {
 	other := &client{t: t, base: e.base}
 	other.do("POST", "/auth/login", map[string]string{"username": "alex", "password": "password123", "deviceName": "Living room TV"}, nil)
 	r, body := rc.wait(t, "user.signed_in")
-	ts, _ := strconv.ParseInt(r.Header.Get("X-Kinora-Timestamp"), 10, 64)
-	if r.Header.Get("X-Kinora-Signature") != signature(wh.Secret, ts, body) {
+	ts, _ := strconv.ParseInt(r.Header.Get("X-Kinara-Timestamp"), 10, 64)
+	if r.Header.Get("X-Kinara-Signature") != signature(wh.Secret, ts, body) {
 		t.Fatal("bad signature")
 	}
 	if r.Header.Get("X-Extra") != "yes" || r.Header.Get("Content-Type") != "application/json" ||
-		!strings.HasPrefix(r.Header.Get("X-Kinora-Delivery"), "dlv_") {
+		!strings.HasPrefix(r.Header.Get("X-Kinara-Delivery"), "dlv_") {
 		t.Fatalf("headers: %v", r.Header)
 	}
 	var env struct {
@@ -177,7 +177,7 @@ func TestWebhookDelivery(t *testing.T) {
 		}
 	}
 	json.Unmarshal(body, &env)
-	if env.ID != r.Header.Get("X-Kinora-Delivery") || env.Server.ID == "" || env.Data.Account.Name != "alex" || env.Data.Device.Name != "Living room TV" {
+	if env.ID != r.Header.Get("X-Kinara-Delivery") || env.Server.ID == "" || env.Data.Account.Name != "alex" || env.Data.Device.Name != "Living room TV" {
 		t.Fatalf("envelope: %s", body)
 	}
 	// It was a device never seen before.

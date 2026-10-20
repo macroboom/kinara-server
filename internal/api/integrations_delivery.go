@@ -16,7 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"kinora/internal/store"
+	"kinara/internal/store"
 )
 
 // The delivery worker: queues what emit hands it, sends each webhook's
@@ -53,7 +53,7 @@ const maxResponseLog = 4 << 10
 // tick is how often the worker looks around when nothing wakes it.
 const tick = 5 * time.Second
 
-// signature is the X-Kinora-Signature value: "sha256=" and the hex HMAC
+// signature is the X-Kinara-Signature value: "sha256=" and the hex HMAC
 // SHA-256 of "<timestamp>.<body>" with the webhook's secret.
 func signature(secret string, timestamp int64, body []byte) string {
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -263,11 +263,11 @@ func (s *Server) post(ctx context.Context, h store.Webhook, deliveryID, event st
 		}
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Kinora/"+s.Version)
-	req.Header.Set("X-Kinora-Event", event)
-	req.Header.Set("X-Kinora-Delivery", deliveryID)
-	req.Header.Set("X-Kinora-Timestamp", strconv.FormatInt(ts, 10))
-	req.Header.Set("X-Kinora-Signature", signature(h.Secret, ts, body))
+	req.Header.Set("User-Agent", "Kinara/"+s.Version)
+	req.Header.Set("X-Kinara-Event", event)
+	req.Header.Set("X-Kinara-Delivery", deliveryID)
+	req.Header.Set("X-Kinara-Timestamp", strconv.FormatInt(ts, 10))
+	req.Header.Set("X-Kinara-Signature", signature(h.Secret, ts, body))
 
 	client := &http.Client{CheckRedirect: sameHostRedirects}
 	resp, err := client.Do(req)
@@ -285,7 +285,7 @@ func (s *Server) post(ctx context.Context, h store.Webhook, deliveryID, event st
 	switch {
 	case code >= 200 && code < 300:
 	case code >= 300 && code < 400:
-		a.Error = "Redirected to " + resp.Header.Get("Location") + "; Kinora only follows redirects on the same host"
+		a.Error = "Redirected to " + resp.Header.Get("Location") + "; Kinara only follows redirects on the same host"
 	default:
 		a.Error = http.StatusText(code)
 		if a.Error == "" {
