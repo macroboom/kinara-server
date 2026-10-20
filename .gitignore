@@ -3,10 +3,6 @@
 /kinara-server
 /kinara-server.exe
 
-/kinora-data/
-/kinora-server
-/kinora-server.exe
-/tmp/
 
 /tmp/
 
@@ -24,8 +20,7 @@
 /sidecar/target/
 /kinara-iroh
 /kinara-iroh.exe
-/kinora-iroh
-/kinora-iroh.exe
+
 # Editors and OS
 .idea/
 .vscode/
