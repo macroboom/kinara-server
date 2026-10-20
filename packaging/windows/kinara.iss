@@ -47,9 +47,8 @@ SolidCompression=yes
 ; message, instead of the generic "close these applications" page.
 CloseApplications=no
 RestartApplications=no
-#if FileExists(AddBackslash(SourcePath) + "..\..\LICENSE")
-LicenseFile=..\..\LICENSE
-#endif
+; No "I accept" page: the AGPL asks for no agreement to run Kinara, and the
+; web app has its own terms. LICENSE.txt is installed with the program instead.
 
 [Messages]
 WelcomeLabel2=This sets up [name/ver], a media server for your movies and shows, on this PC.%n%nNext you'll see everything it installs and every change it makes to Windows, before anything happens. You choose where your data goes and how the server runs.
@@ -71,6 +70,7 @@ Source: "kinara.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Stage}\ffmpeg\*"; DestDir: "{app}\ffmpeg"; Flags: ignoreversion recursesubdirs restartreplace
 Source: "{#Stage}\web\*"; DestDir: "{app}\web"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Stage}\THIRD-PARTY.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 ; Old web app files from a previous version must not linger.
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\web"
@@ -294,6 +294,7 @@ begin
     '  ffmpeg\              FFmpeg and FFprobe (GPL build, unmodified): read your' + #13#10 +
     '                       files and convert video for devices that need it.' + #13#10 +
     '  web\                 the Kinara web app, served by the server.' + #13#10 +
+    '  LICENSE.txt          the server''s license (GNU AGPL v3).' + #13#10 +
     '  kinara.ico, THIRD-PARTY.txt (licenses of bundled software).' + #13#10 +
     '' + #13#10 +
     'YOUR DATA, in folders you choose on a later page:' + #13#10 +

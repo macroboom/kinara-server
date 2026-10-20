@@ -278,3 +278,27 @@ internal/cloud        Kinara account link: presence, router port, certificate, H
 - Passwords use PBKDF2-SHA256 (standard library); Argon2id can replace it later
   without breaking existing hashes.
 - The web page uses plain HTTP on your network. HTTPS comes with remote access.
+
+## License
+
+Copyright (C) 2026 Macroboom LLC.
+
+The Kinara server (this repository: the server, the tray app, the iroh
+sidecar and the installer scripts) is free software: you can redistribute it
+and/or modify it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the License,
+or (at your option) any later version. It comes with no warranty; see
+[LICENSE](LICENSE) for the full terms.
+
+The AGPL also covers running a modified server for other people over a
+network: whoever does must offer those people the source of their version.
+
+The Kinara apps are separate programs with their own terms and are not in
+this repository. The web app, the Android TV and phone apps and the Roku
+channel are proprietary (all rights reserved) and talk to the server only
+through its HTTP API. The official installers include the web app; a server
+built from this repository serves the API and the built-in pages without it.
+
+FFmpeg, which the installers bundle unmodified, has its own license (GPL v3
+for the Windows build); an installed copy lists it in `THIRD-PARTY.txt`.
+Kinara uses the TMDB API but is not endorsed or certified by TMDB.

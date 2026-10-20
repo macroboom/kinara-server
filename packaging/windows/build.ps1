@@ -180,8 +180,19 @@ Copy-Item (Join-Path $root.FullName "LICENSE") (Join-Path $ff "LICENSE.txt")
 
 # 5. Licenses of what we ship.
 Step "THIRD-PARTY.txt"
+if (-not (Test-Path (Join-Path $repo "LICENSE"))) { throw "LICENSE is missing from the repo root" }
 @"
-Kinara for Windows bundles this third-party software.
+Kinara for Windows
+
+kinara-server.exe, kinara-tray.exe and kinara-iroh.exe are the Kinara server,
+Copyright (C) 2026 Macroboom LLC, free software under the GNU Affero General
+Public License version 3 or later (LICENSE.txt in this folder).
+
+The Kinara web app (web\) is Copyright (C) 2026 Macroboom LLC, all rights
+reserved. It is a separate program, not covered by the AGPL, included so the
+server has a full interface in your browser.
+
+Kinara for Windows also bundles this third-party software.
 
 FFmpeg $FfmpegVersion ($FfmpegFlavor), in ffmpeg\
   Built by Gyan Doshi (https://www.gyan.dev/ffmpeg/builds/), unmodified.
@@ -198,8 +209,8 @@ kinara-iroh.exe is built with iroh (https://github.com/n0-computer/iroh,
 MIT or Apache-2.0) and other Rust crates under MIT, Apache-2.0 and similar
 permissive licenses; see sidecar\Cargo.lock in the Kinara server source.
 
-The Kinara web app (web\) uses React and other packages under MIT and
-similar permissive licenses.
+The web app uses React and other packages under MIT and similar permissive
+licenses.
 "@ | Set-Content (Join-Path $stage "THIRD-PARTY.txt") -Encoding UTF8
 
 # 6. Installer.
