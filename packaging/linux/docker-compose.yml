@@ -6,7 +6,7 @@
 # your folders (they're under /media inside the container).
 services:
   kinara:
-    image: ghcr.io/<owner>/kinara-server:latest
+    image: ghcr.io/macroboom/kinara-server:latest
     container_name: kinara
     # Host networking: the apps find the server on your network, and remote
     # access can open a port on your router (UPnP). With ports: instead,

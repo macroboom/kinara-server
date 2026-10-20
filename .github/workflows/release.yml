@@ -2,7 +2,7 @@
 #
 #   build    the server, the sidecar and the web app on amd64 and arm64,
 #            and a .deb for each (packaging/linux/build.sh)
-#   docker   ghcr.io/<owner>/kinara-server, both architectures
+#   docker   ghcr.io/macroboom/kinara-server, both architectures
 #   apt      the .debs into https://apt.kinara.media (not for pre-releases)
 #   release  a GitHub release with the .debs attached
 #

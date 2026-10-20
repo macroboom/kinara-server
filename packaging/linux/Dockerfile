@@ -15,7 +15,7 @@
 #     -e PUID=1000 -e PGID=1000 \
 #     -v ./config:/config -v ./cache:/cache -v /srv/media:/media:ro \
 #     --device /dev/dri:/dev/dri \
-#     ghcr.io/<owner>/kinara-server
+#     ghcr.io/macroboom/kinara-server
 
 FROM debian:bookworm-slim
 

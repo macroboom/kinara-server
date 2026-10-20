@@ -4,7 +4,7 @@ Two ways to run the server on Linux, both for amd64 and arm64 (Raspberry Pi
 4 and 5, ARM NAS boxes):
 
 - **Debian and Ubuntu:** a package from `apt.kinara.media`, run by systemd.
-- **Docker:** `ghcr.io/<owner>/kinara-server`, for anything else (Unraid,
+- **Docker:** `ghcr.io/macroboom/kinara-server`, for anything else (Unraid,
   Synology, TrueNAS, other distributions).
 
 Both are made by the release workflow (`.github/workflows/release.yml`) from
@@ -60,7 +60,7 @@ docker run -d --name kinara --network host --restart unless-stopped \
   -e PUID=1000 -e PGID=1000 \
   -v ./config:/config -v ./cache:/cache -v /srv/media:/media:ro \
   --device /dev/dri:/dev/dri \
-  ghcr.io/<owner>/kinara-server
+  ghcr.io/macroboom/kinara-server
 ```
 
 or `docker compose up -d` with `docker-compose.yml` from this folder. Then

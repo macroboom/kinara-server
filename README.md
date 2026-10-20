@@ -1,18 +1,25 @@
 # Kinara Server
 
-The Kinara media server, MVP stage: it scans Movies and TV folders, matches them
-to TMDB, serves a JSON API for the apps, direct-plays files with seeking, tracks
-progress and the next episode, and has a small built-in web page for checking
-that libraries load correctly.
+The Kinara media server, for your movies and shows. It scans your folders,
+finds posters, descriptions and cast on TMDB, and streams to the Kinara apps
+(Android TV, phones, Roku and the web):
 
-Not in this version yet: transcoding, profiles, TV pairing, remote access,
-Kinara Cloud. See the architecture plan for the roadmap.
+- plays files as they are when the player can, and converts them when it
+  can't, with graphics card encoding and HDR and Dolby Vision handling;
+- watch history, Continue Watching and next episodes per profile, Skip intro,
+  preview thumbnails while skipping, and watch parties;
+- remote play away from home with a Kinara account: direct when the network
+  allows, through the Kinara relay when it doesn't, with no port forwarding;
+- requests and Discover from TMDB, and webhooks for Sonarr and Radarr.
+
+This repository is the server and its remote access sidecar. The apps are
+separate (see License).
 
 ## Installing
 
 - **Windows:** the installer from `packaging/windows` (see its README).
 - **Debian and Ubuntu:** `apt install kinara-server` from `apt.kinara.media`.
-- **Docker:** `ghcr.io/<owner>/kinara-server`.
+- **Docker:** `ghcr.io/macroboom/kinara-server`.
 
 The Linux package and image, how to install them, and how releases are
 made: [packaging/linux/README.md](packaging/linux/README.md). The rest of
@@ -20,7 +27,8 @@ this file is for running the server from source.
 
 ## Requirements
 
-- Go 1.24 or newer
+- Go (the version in `go.mod`)
+- Rust, only for remote access (`sidecar/`, see its README)
 - ffmpeg (for `ffprobe`); 7.1 or later to stream Dolby Vision profile 7 to
   Apple players and browsers without converting it
 - A TMDB API key or read access token, free for development at
@@ -280,11 +288,8 @@ internal/cloud        Kinara account link: presence, router port, certificate, H
 
 ## Known limits of this version
 
-- Direct play only: the client must handle the file's codecs.
-- One watch history per user; profiles come next.
-- New files are picked up by the 6-hourly rescan or **Scan now**; there is no
-  file watching yet. Files modified in the last minute are skipped until the
-  next scan so half-copied files are never matched.
+- Files modified in the last minute are skipped until the next check, so
+  half-copied files are never matched.
 - Multi-episode files are listed under their first episode.
 - Passwords use PBKDF2-SHA256 (standard library); Argon2id can replace it later
   without breaking existing hashes.
