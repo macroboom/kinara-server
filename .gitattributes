@@ -1,0 +1,4 @@
+# Shell scripts and the Linux packaging run on Linux: keep LF line endings
+# even in a Windows checkout.
+*.sh text eol=lf
+packaging/linux/** text eol=lf

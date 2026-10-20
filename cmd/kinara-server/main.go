@@ -16,7 +16,8 @@
 //	-listen   KINARA_LISTEN    address to listen on                  :8420
 //	-tmdb-key KINARA_TMDB_KEY  your own TMDB API key or read access   the key built into release builds
 //	                           token, used instead of the built-in one
-//	-ffprobe  KINARA_FFPROBE   path to ffprobe                       ffmpeg\ffprobe next to the server, else on PATH
+//	-ffprobe  KINARA_FFPROBE   path to ffprobe                       ffmpeg\ffprobe next to the server, else
+//	                                                                  Jellyfin's FFmpeg (Linux), else on PATH
 //	-ffmpeg   KINARA_FFMPEG    path to ffmpeg                        next to ffprobe, or on PATH
 //
 // Background features (on unless set to 0 or off):
@@ -35,6 +36,8 @@
 //
 // Remote access (turned on in the web manager, under Remote access):
 //
+//	KINARA_CLOUD_URL       the Kinara cloud for accounts and remote play (default
+//	                       https://cloud.kinara.media; off turns it off)
 //	KINARA_IROH            path to kinara-iroh (default: next to the server, or on PATH)
 //	KINARA_TUNNEL_LISTEN   loopback address kinara-iroh delivers connections to (default 127.0.0.1:8421)
 package main
@@ -80,7 +83,14 @@ import (
 	"kinara/internal/watcher"
 )
 
-const version = "0.1.0-dev"
+// version is what the server reports. Release builds set it from the tag
+// (-ldflags "-X main.version=0.2.0"); build.ps1 reads this line.
+var version = "0.1.0-dev"
+
+// defaultCloudURL is the Kinara cloud a server links to unless
+// KINARA_CLOUD_URL says otherwise ("off" turns accounts and remote play off).
+// Nothing is sent to it until the owner links the server under Remote access.
+const defaultCloudURL = "https://cloud.kinara.media"
 
 type config struct {
 	dataDir  string
@@ -105,7 +115,9 @@ func (c config) cache(name string) string {
 
 // bundledTool finds a tool shipped with the server: ffmpeg\ffprobe.exe (or
 // ffmpeg/ffprobe) in the server's own folder, as the Windows installer lays
-// it out, else beside the server. "" means look on PATH.
+// it out, else beside the server, else (Linux) Jellyfin's FFmpeg build, which
+// the Docker image and the .deb use for its HDR tone mapping and hardware
+// drivers. "" means look on PATH.
 func bundledTool(name string) string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -115,7 +127,11 @@ func bundledTool(name string) string {
 		name += ".exe"
 	}
 	dir := filepath.Dir(exe)
-	for _, p := range []string{filepath.Join(dir, "ffmpeg", name), filepath.Join(dir, name)} {
+	candidates := []string{filepath.Join(dir, "ffmpeg", name), filepath.Join(dir, name)}
+	if runtime.GOOS == "linux" {
+		candidates = append(candidates, filepath.Join("/usr/lib/jellyfin-ffmpeg", name))
+	}
+	for _, p := range candidates {
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 			return p
 		}
@@ -683,7 +699,7 @@ func scanCmd(args []string) error {
 // certificate for its own names, a router port opened by UPnP or NAT-PMP,
 // and the cloud's relay for players that can't connect directly.
 func startCloud(ctx context.Context, d *deps, srv *api.Server, handler http.Handler, c config) {
-	url := env("KINARA_CLOUD_URL", "")
+	url := env("KINARA_CLOUD_URL", defaultCloudURL)
 	if url == "" || url == "off" {
 		return
 	}

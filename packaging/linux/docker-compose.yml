@@ -1,0 +1,37 @@
+# Kinara server with Docker Compose:
+#
+#   docker compose up -d
+#
+# then open http://<this machine>:8420 to make the owner account and add
+# your folders (they're under /media inside the container).
+services:
+  kinara:
+    image: ghcr.io/<owner>/kinara-server:latest
+    container_name: kinara
+    # Host networking: the apps find the server on your network, and remote
+    # access can open a port on your router (UPnP). With ports: instead,
+    # both of those stop working.
+    network_mode: host
+    environment:
+      # The user and group that own your config, cache and media (`id` shows yours).
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      # Your own TMDB key, instead of the one built in.
+      # - KINARA_TMDB_KEY=
+    volumes:
+      - ./config:/config     # database and settings
+      - ./cache:/cache       # artwork, converted video, previews (can grow large)
+      - /srv/media:/media:ro # your movies and shows; read-only is fine
+    # Intel or AMD graphics for converting:
+    devices:
+      - /dev/dri:/dev/dri
+    # NVIDIA instead (needs the NVIDIA Container Toolkit on the host):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu, video, compute, utility]
+    restart: unless-stopped

@@ -2,10 +2,11 @@
 /kinara-data/
 /kinara-server
 /kinara-server.exe
-
-init.mp4
-
 /tmp/
+
+# Linux builds (packaging/linux/build.sh)
+/dist/
+/out/
 
 # SQLite
 *.db

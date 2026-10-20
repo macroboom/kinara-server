@@ -1,0 +1,40 @@
+[Unit]
+Description=Kinara media server
+Documentation=https://kinara.media
+Wants=network-online.target
+After=network-online.target local-fs.target remote-fs.target
+
+[Service]
+Type=simple
+User=kinara
+Group=kinara
+# Settings: /etc/kinara/kinara.env (kept on upgrades). For changes of your
+# own, prefer `systemctl edit kinara-server`.
+EnvironmentFile=/etc/kinara/kinara.env
+ExecStart=/usr/bin/kinara-server serve
+WorkingDirectory=/var/lib/kinara
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+LimitNOFILE=65536
+
+# /var/lib/kinara and /var/cache/kinara, owned by the kinara user.
+StateDirectory=kinara
+StateDirectoryMode=0750
+CacheDirectory=kinara
+CacheDirectoryMode=0750
+
+# Hardening. Kinara only reads your media, so the rest of the system is
+# read-only to it; /dev/dri and /dev/nvidia* stay reachable for converting.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

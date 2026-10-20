@@ -1,0 +1,225 @@
+# Release: push a tag like v0.2.0 (or v0.2.0-rc.1 for a pre-release).
+#
+#   build    the server, the sidecar and the web app on amd64 and arm64,
+#            and a .deb for each (packaging/linux/build.sh)
+#   docker   ghcr.io/<owner>/kinara-server, both architectures
+#   apt      the .debs into https://apt.kinara.media (not for pre-releases)
+#   release  a GitHub release with the .debs attached
+#
+# Run it by hand (Actions > Release > Run workflow) to build and test
+# without publishing anything.
+#
+# Secrets (Settings > Secrets and variables > Actions), see packaging/linux/README.md:
+#   TMDB_KEY          Kinara's TMDB key, built into the server
+#   WEB_REPO_TOKEN    read access to the private kinara-web repository
+#   GPG_PRIVATE_KEY   the APT signing key (armored), and GPG_PASSPHRASE
+#   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Ubuntu 22.04: the sidecar then runs on glibc 2.35 and newer
+          # (Debian 12, Ubuntu 22.04 and later).
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out kinara-web (private)
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/kinara-web
+          token: ${{ secrets.WEB_REPO_TOKEN }}
+          path: kinara-web
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sidecar
+          key: ${{ matrix.arch }}
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Tools
+        run: |
+          # Jellyfin's FFmpeg, as the .deb prefers: Ubuntu 22.04's own is 4.4.
+          curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg
+          printf 'Types: deb\nURIs: https://repo.jellyfin.org/ubuntu\nSuites: jammy\nComponents: main\nSigned-By: /usr/share/keyrings/jellyfin.gpg\n' |
+            sudo tee /etc/apt/sources.list.d/jellyfin.sources >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jellyfin-ffmpeg7
+          echo /usr/lib/jellyfin-ffmpeg >> "$GITHUB_PATH"
+          # nfpm makes the .deb.
+          nfpm=2.47.0
+          case "$(uname -m)" in x86_64) a=x86_64 ;; aarch64) a=arm64 ;; esac
+          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v$nfpm/nfpm_${nfpm}_Linux_$a.tar.gz" |
+            sudo tar -xz -C /usr/local/bin nfpm
+          nfpm --version
+
+      - name: Test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Build
+        env:
+          KINARA_TMDB_KEY: ${{ secrets.TMDB_KEY }}
+          WEB_REPO: ${{ github.workspace }}/kinara-web
+        run: |
+          if [ "$PUBLISH" = true ]; then export VERSION="${GITHUB_REF_NAME#v}"; fi
+          bash packaging/linux/build.sh
+
+      - name: Check the .deb
+        run: |
+          deb=$(ls out/*.deb)
+          dpkg-deb --info "$deb"
+          dpkg-deb --contents "$deb"
+          sudo apt-get install -y "./$deb"
+          systemctl status kinara-server --no-pager || true
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8420/api/v1/health && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8420/api/v1/health
+          sudo journalctl -u kinara-server --no-pager | tail -n 20
+          sudo apt-get remove -y kinara-server
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            dist/linux_${{ matrix.arch }}/
+            out/*.deb
+            out/*.sha256
+          if-no-files-found: error
+      # The web app and the entrypoint are the same for both: upload once.
+      - if: matrix.arch == 'amd64'
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-common
+          path: |
+            dist/web/
+            dist/docker-entrypoint.sh
+          if-no-files-found: error
+
+  docker:
+    name: Docker image
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: linux-*64
+          merge-multiple: true
+      # Uploaded from inside dist/, so it goes back there.
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-common
+          path: dist
+      - name: Build context
+        run: ls -R dist | head -n 30 && test -f dist/web/index.html && test -f dist/docker-entrypoint.sh
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/kinara-server
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+          flavor: |
+            latest=auto
+      - if: env.PUBLISH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: dist
+          file: packaging/linux/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  apt:
+    name: APT repository
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: linux-*64
+          merge-multiple: true
+      - id: gpg
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends apt-utils
+      - name: Publish
+        env:
+          GPG_KEY_ID: ${{ steps.gpg.outputs.fingerprint }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: bash packaging/linux/apt/publish.sh out/*.deb
+
+  release:
+    name: GitHub release
+    needs: [build, docker]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: linux-*64
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            out/*.deb
+            out/*.sha256

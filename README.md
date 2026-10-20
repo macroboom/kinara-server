@@ -8,6 +8,16 @@ that libraries load correctly.
 Not in this version yet: transcoding, profiles, TV pairing, remote access,
 Kinara Cloud. See the architecture plan for the roadmap.
 
+## Installing
+
+- **Windows:** the installer from `packaging/windows` (see its README).
+- **Debian and Ubuntu:** `apt install kinara-server` from `apt.kinara.media`.
+- **Docker:** `ghcr.io/<owner>/kinara-server`.
+
+The Linux package and image, how to install them, and how releases are
+made: [packaging/linux/README.md](packaging/linux/README.md). The rest of
+this file is for running the server from source.
+
 ## Requirements
 
 - Go 1.24 or newer
@@ -53,14 +63,15 @@ kinara-server scan                              # scan everything now and wait
 | `-data` | `KINARA_DATA` | `./kinara-data` |
 | `-listen` | `KINARA_LISTEN` | `:8420` |
 | `-tmdb-key` | `KINARA_TMDB_KEY` | none |
-| `-ffprobe` | `KINARA_FFPROBE` | `ffprobe` on PATH |
+| `-ffprobe` | `KINARA_FFPROBE` | next to the server, then `/usr/lib/jellyfin-ffmpeg` (Linux), then `ffprobe` on PATH |
 | `-rescan` | | `6h` (0 turns it off) |
 | `-scan-workers` | `KINARA_SCAN_WORKERS` | by drive type: SSD one per CPU up to 8, hard drive 2, network 6 |
 
 ### Remote play with a Kinara account
 
-Set `KINARA_CLOUD_URL` to the Kinara cloud (`https://cloud.<domain>`), restart,
-then open the manager, **Remote access**, and choose **Link to my Kinara
+Servers use the Kinara cloud at `https://cloud.kinara.media` unless
+`KINARA_CLOUD_URL` names another (`off` turns accounts and remote play off).
+Nothing is sent to it until you link the server: open the manager, **Remote access**, and choose **Link to my Kinara
 account**. Approve the code it shows at the cloud's `/link` page. From then on
 the server:
 
@@ -80,7 +91,7 @@ iroh tunnel) can't create accounts or set the server up.
 
 | Environment | Default | Meaning |
 | --- | --- | --- |
-| `KINARA_CLOUD_URL` | none (off) | The Kinara cloud |
+| `KINARA_CLOUD_URL` | `https://cloud.kinara.media` | The Kinara cloud (`off`: no accounts or remote play) |
 | `KINARA_HTTPS_PORT` | `32443` | Port of the HTTPS listener (0: relay only) |
 | `KINARA_PUBLIC_PORT` | none | A port you forwarded on the router to `KINARA_HTTPS_PORT` |
 | `KINARA_PORT_MAPPING` | `on` | `off` stops UPnP / NAT-PMP |

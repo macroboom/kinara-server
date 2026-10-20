@@ -1,0 +1,56 @@
+# The kinara-server .deb, made by build.sh with nfpm (https://nfpm.goreleaser.com).
+# build.sh fills in ${VERSION}, ${ARCH} (amd64 or arm64), ${DIST} (the dist
+# folder) and ${REPO} (this repository) before running nfpm.
+name: kinara-server
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+section: video
+priority: optional
+maintainer: Macroboom LLC <support@kinara.media>
+vendor: Macroboom LLC
+homepage: https://kinara.media
+license: AGPL-3.0-or-later
+description: |-
+  Kinara media server for your movies and shows
+  Scans your movie and TV folders, finds posters and descriptions, and
+  streams to the Kinara apps on Android TV, phones, Roku and the web,
+  at home and away. Converts video for devices that can't play a file as
+  it is, with hardware encoding when a graphics card is available.
+
+depends:
+  # Jellyfin's FFmpeg first: HDR tone mapping, Dolby Vision and hardware
+  # drivers. The distribution's ffmpeg works too, with fewer of those.
+  - jellyfin-ffmpeg7 | ffmpeg
+  # kinara-iroh is built on Ubuntu 22.04.
+  - libc6 (>= 2.35)
+  - adduser
+recommends:
+  - ca-certificates
+
+contents:
+  - src: ${DIST}/linux_${ARCH}/kinara-server
+    dst: /usr/bin/kinara-server
+    file_info: { mode: 0755 }
+  - src: ${DIST}/linux_${ARCH}/kinara-iroh
+    dst: /usr/bin/kinara-iroh
+    file_info: { mode: 0755 }
+  - src: ${DIST}/web
+    dst: /usr/share/kinara/web
+  - src: ${REPO}/packaging/linux/kinara-server.service
+    dst: /usr/lib/systemd/system/kinara-server.service
+    file_info: { mode: 0644 }
+  # Settings: kept on upgrade if changed (a conffile).
+  - src: ${REPO}/packaging/linux/kinara.env
+    dst: /etc/kinara/kinara.env
+    type: config|noreplace
+    file_info: { mode: 0640 }
+  - src: ${REPO}/LICENSE
+    dst: /usr/share/doc/kinara-server/copyright
+    file_info: { mode: 0644 }
+
+scripts:
+  postinstall: ${REPO}/packaging/linux/scripts/postinstall.sh
+  preremove: ${REPO}/packaging/linux/scripts/preremove.sh
+  postremove: ${REPO}/packaging/linux/scripts/postremove.sh

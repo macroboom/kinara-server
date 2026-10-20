@@ -51,7 +51,7 @@ function Check-Exit($what) { if ($LASTEXITCODE -ne 0) { throw "$what failed (exi
 
 # The version is the one the server reports (cmd/kinara-server/main.go).
 $main = Get-Content (Join-Path $repo "cmd\kinara-server\main.go") -Raw
-if ($main -notmatch 'const version = "([^"]+)"') { throw "can't find the version in main.go" }
+if ($main -notmatch '(?m)^(?:const|var) version = "([^"]+)"') { throw "can't find the version in main.go" }
 $version = $Matches[1]
 Write-Host "Kinara $version" -ForegroundColor Green
 
