@@ -174,8 +174,7 @@ func commonFlags(fs *flag.FlagSet, c *config) {
 }
 
 func main() {
-	envFile := env("KINARA_ENV_FILE", ".env")
-	if err := loadDotEnv(envFile); err != nil {
+	if err := loadEnvFile(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}

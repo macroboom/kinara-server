@@ -1311,6 +1311,97 @@ paths:
         "403": { description: Sign-up is off }
         "409": { description: Name taken }
 
+  /auth/quick/start:
+    post:
+      summary: Quick Connect - get a code to sign this device in from a phone or the web app
+      description: >
+        For TVs and other devices where typing a password is a chore. Show the
+        code; someone signed in elsewhere enters it (POST /auth/quick/approve)
+        and the next poll signs this device in as them. Codes last 10 minutes.
+        No Kinara account is involved.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceName: { type: string }
+                device: { $ref: "#/components/schemas/DeviceInfo" }
+      responses:
+        "200":
+          description: The code to show, and the secret to poll with (keep it on this device)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string, description: Six digits }
+                  secret: { type: string }
+                  expiresAt: { type: integer, description: Unix seconds }
+                  interval: { type: integer, description: Seconds between polls }
+        "429": { description: Too many codes asked for from this address }
+        "503": { description: Too many codes waiting on this server }
+
+  /auth/quick/poll:
+    post:
+      summary: Quick Connect - has the code been approved?
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [secret], properties: { secret: { type: string } } }
+      responses:
+        "200": { description: Approved and signed in; same shape as /auth/login. Works once. }
+        "202": { description: Not approved yet }
+        "410": { description: The code ran out, was cancelled or was already used; get a new one }
+
+  /auth/quick/cancel:
+    post:
+      summary: Quick Connect - forget a code this device no longer shows
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [secret], properties: { secret: { type: string } } }
+      responses:
+        "204": { description: Forgotten (or already gone) }
+
+  /auth/quick/{code}:
+    get:
+      summary: Quick Connect - which device is waiting behind a code
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The waiting device
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string }
+                  device: { type: string }
+                  expiresAt: { type: integer }
+        "404": { description: No such code waiting }
+        "429": { description: Too many wrong codes from this account or address }
+
+  /auth/quick/approve:
+    post:
+      summary: Quick Connect - sign the code's device in as you
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [code], properties: { code: { type: string, description: Spaces are ignored } } }
+      responses:
+        "200":
+          description: Approved
+          content:
+            application/json:
+              schema: { type: object, properties: { device: { type: string } } }
+        "404": { description: No such code waiting }
+        "429": { description: Too many wrong codes from this account or address }
+
   /setup:
     post:
       summary: First run only - make the owner account and sign it in

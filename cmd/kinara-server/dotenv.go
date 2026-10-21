@@ -9,6 +9,24 @@ import (
 	"strings"
 )
 
+// loadEnvFile loads the file KINARA_ENV_FILE names, or ./.env when it isn't
+// set. The default .env is a convenience for running from a source folder,
+// so one this user can't read (someone else's, as when kinara-server is run
+// by hand from inside another account's folder) is skipped with a note
+// instead of stopping the command. A file named in KINARA_ENV_FILE must be
+// readable.
+func loadEnvFile() error {
+	if path := os.Getenv("KINARA_ENV_FILE"); path != "" {
+		return loadDotEnv(path)
+	}
+	err := loadDotEnv(".env")
+	if errors.Is(err, fs.ErrPermission) {
+		fmt.Fprintf(os.Stderr, "note: skipped .env in this folder: %v\n", err)
+		return nil
+	}
+	return err
+}
+
 // loadDotEnv reads KEY=VALUE lines from path into the environment. A missing
 // file is fine. Variables already set in the real environment win, so
 // `KINARA_LISTEN=:9000 kinara-server` still overrides the file.

@@ -23,6 +23,7 @@ import (
 	"kinara/internal/match"
 	"kinara/internal/metrics"
 	"kinara/internal/pgs"
+	"kinara/internal/quick"
 	"kinara/internal/remote"
 	"kinara/internal/scanner"
 	"kinara/internal/store"
@@ -109,6 +110,11 @@ type Server struct {
 	// together: a remote device's "address" is its node ID, which costs
 	// nothing to change, so a per-address limit alone could be dodged.
 	tunnelLimiter *auth.Limiter
+	// quick holds Quick Connect codes (quickconnect.go); quickStarts limits
+	// how many each address asks for, quickWrong wrong codes entered.
+	quick       *quick.Codes
+	quickStarts *auth.Limiter
+	quickWrong  *auth.Limiter
 	// nodeSeen remembers which node ID each session last used through the
 	// tunnel, so the database is written only when it changes.
 	nodeSeen sync.Map
@@ -126,6 +132,9 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	s.limiter = &auth.Limiter{Max: 10, Window: 10 * time.Minute}
 	s.tunnelLimiter = &auth.Limiter{Max: 30, Window: 10 * time.Minute}
+	s.quick = quick.New()
+	s.quickStarts = &auth.Limiter{Max: 30, Window: 10 * time.Minute}
+	s.quickWrong = &auth.Limiter{Max: 10, Window: 10 * time.Minute}
 	s.tmpl = template.Must(template.New("").Funcs(templateFuncs).ParseFS(templatesFS, "templates/*.html"))
 
 	mux := http.NewServeMux()
@@ -136,6 +145,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/cloud", s.cloudSignIn)
 	mux.HandleFunc("GET /api/v1/auth/accounts", s.accounts)
 	mux.HandleFunc("POST /api/v1/auth/signup", s.signup)
+	mux.HandleFunc("POST /api/v1/auth/quick/start", s.quickStart)
+	mux.HandleFunc("POST /api/v1/auth/quick/poll", s.quickPollHandler)
+	mux.HandleFunc("POST /api/v1/auth/quick/cancel", s.quickCancel)
 	mux.HandleFunc("POST /api/v1/setup", s.setup)
 	mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")
@@ -144,6 +156,8 @@ func (s *Server) Handler() http.Handler {
 
 	// Signed in.
 	mux.Handle("POST /api/v1/auth/logout", s.user(s.logout))
+	mux.Handle("GET /api/v1/auth/quick/{code}", s.user(s.quickInfoHandler))
+	mux.Handle("POST /api/v1/auth/quick/approve", s.user(s.quickApprove))
 	mux.Handle("GET /api/v1/me", s.user(s.me))
 	mux.Handle("GET /api/v1/libraries", s.user(s.listLibraries))
 	mux.Handle("GET /api/v1/items", s.user(s.listItems))

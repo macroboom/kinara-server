@@ -225,6 +225,14 @@ the pilot). Owners approve or decline them under Manage > Requests. Approving
 emits `request.approved`, which your scripts and tools can pick up through a
 webhook. A request becomes "available" once the title shows up in a library.
 
+**Quick Connect** signs a TV in without typing a password: the TV asks for a
+six-digit code (`POST /api/v1/auth/quick/start`) and shows it, someone
+signed in on their phone (You > Sign in a TV) or in the web app enters it
+(`POST /api/v1/auth/quick/approve`), and the TV's next poll
+(`POST /api/v1/auth/quick/poll`) signs it in as them. Codes last 10 minutes,
+work once and stay on the server (no Kinara account needed). Ten wrong codes
+from one account or address within 10 minutes pause approving for a while.
+
 Apps describe themselves when they sign in (a `device` object with a stable
 install ID, platform, brand and model), so the device list shows what each
 device is. An owner can trust a device (`PUT /api/v1/clients/{clientId}`):
