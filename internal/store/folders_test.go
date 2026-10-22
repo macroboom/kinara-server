@@ -5,7 +5,9 @@ package store
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -44,11 +46,16 @@ func TestLibraryFolders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// File paths use this system's separator, as the scanner's do (a
+	// folder's files are found by its path plus the separator).
+	in := func(folder string, parts ...string) string {
+		return folder + string(filepath.Separator) + strings.Join(parts, string(filepath.Separator))
+	}
 	for _, v := range []Version{
-		{LibraryID: lib.ID, ItemID: gone.ID, Path: "/a/gone.mkv", RelPath: "gone.mkv", Size: 1},
-		{LibraryID: lib.ID, ItemID: gone.ID, Path: "/a/sub/gone2.mkv", RelPath: "sub/gone2.mkv", Size: 1},
-		{LibraryID: lib.ID, ItemID: keep.ID, Path: "/b/keep.mkv", RelPath: "keep.mkv", Size: 1},
-		{LibraryID: lib.ID, ItemID: keep.ID, Path: "/ab/keep.mkv", RelPath: "keep.mkv", Size: 1},
+		{LibraryID: lib.ID, ItemID: gone.ID, Path: in("/a", "gone.mkv"), RelPath: "gone.mkv", Size: 1},
+		{LibraryID: lib.ID, ItemID: gone.ID, Path: in("/a", "sub", "gone2.mkv"), RelPath: "sub/gone2.mkv", Size: 1},
+		{LibraryID: lib.ID, ItemID: keep.ID, Path: in("/b", "keep.mkv"), RelPath: "keep.mkv", Size: 1},
+		{LibraryID: lib.ID, ItemID: keep.ID, Path: in("/ab", "keep.mkv"), RelPath: "keep.mkv", Size: 1},
 	} {
 		v := v
 		if err := s.SaveVersion(ctx, &v, nil); err != nil {

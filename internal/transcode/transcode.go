@@ -355,16 +355,16 @@ func Args(r Request, caps ffmpeg.Caps) []string {
 		a = append(a, "-f", "hls", "-hls_time", "4", "-hls_list_size", "0",
 			"-hls_playlist_type", "event", "-hls_segment_type", "mpegts",
 			"-hls_flags", "independent_segments+temp_file",
-			"-hls_segment_filename", filepath.Join(r.OutDir, "seg%05d.ts"),
-			filepath.Join(r.OutDir, "index.m3u8"))
+			"-hls_segment_filename", hlsPath(r.OutDir, "seg%05d.ts"),
+			hlsPath(r.OutDir, "index.m3u8"))
 	case r.Container == "hls":
 		// Fragmented-MP4 segments of about 4 s, listed as they're made.
 		a = append(a, "-f", "hls", "-hls_time", "4", "-hls_list_size", "0",
 			"-hls_playlist_type", "event", "-hls_segment_type", "fmp4",
 			"-hls_flags", "independent_segments+temp_file",
 			"-hls_fmp4_init_filename", "init.mp4",
-			"-hls_segment_filename", filepath.Join(r.OutDir, "seg%05d.m4s"),
-			filepath.Join(r.OutDir, "index.m3u8"))
+			"-hls_segment_filename", hlsPath(r.OutDir, "seg%05d.m4s"),
+			hlsPath(r.OutDir, "index.m3u8"))
 	case mp4:
 		// delay_moov rather than empty_moov: the header waits for the first
 		// packets, which copied E-AC-3 (Atmos) needs to describe itself.
@@ -373,6 +373,15 @@ func Args(r Request, caps ffmpeg.Caps) []string {
 		a = append(a, "-f", "matroska", "pipe:1")
 	}
 	return a
+}
+
+// hlsPath is a file in the HLS output folder, written with forward slashes.
+// FFmpeg's HLS muxer finds the playlist's folder by looking for the last
+// "/" only, so with Windows backslashes it put init.mp4 in the server's
+// working folder instead of next to the playlist (and the player got a 404
+// for it). Windows FFmpeg takes forward slashes everywhere.
+func hlsPath(dir, name string) string {
+	return filepath.ToSlash(filepath.Join(dir, name))
 }
 
 // videoFilter scales a re-encoded picture down to the height limit and, for
