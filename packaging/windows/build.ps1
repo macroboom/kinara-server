@@ -23,6 +23,9 @@
   later build refuses a zip that doesn't match.
 #>
 param(
+  # The version to stamp (a release tag without the v). Default: the one in
+  # cmd\kinara-server\main.go. The release workflow passes the tag's.
+  [string]$Version = "",
   [string]$WebRepo = "..\..\..\kinara-web",
   [string]$FfmpegVersion = "9.0.2",
   # full_build adds libplacebo (better HDR / Dolby Vision tone mapping) over
@@ -50,9 +53,13 @@ function Need($cmd, $hint) {
 function Check-Exit($what) { if ($LASTEXITCODE -ne 0) { throw "$what failed (exit $LASTEXITCODE)" } }
 
 # The version is the one the server reports (cmd/kinara-server/main.go).
-$main = Get-Content (Join-Path $repo "cmd\kinara-server\main.go") -Raw
-if ($main -notmatch '(?m)^(?:const|var) version = "([^"]+)"') { throw "can't find the version in main.go" }
-$version = $Matches[1]
+if ($Version) {
+  $version = $Version.TrimStart('v')
+} else {
+  $main = Get-Content (Join-Path $repo "cmd\kinara-server\main.go") -Raw
+  if ($main -notmatch '(?m)^(?:const|var) version = "([^"]+)"') { throw "can't find the version in main.go" }
+  $version = $Matches[1]
+}
 Write-Host "Kinara $version" -ForegroundColor Green
 
 $iscc = @(
@@ -91,7 +98,8 @@ Step "Building kinara-server.exe and kinara-tray.exe"
 $env:GOOS = "windows"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
 Push-Location $repo
 try {
-  $serverFlags = "-s -w"
+  # The version too, so the server reports the release it came from.
+  $serverFlags = "-s -w -X main.version=$version"
   if ($TmdbKey) { $serverFlags += " -X main.builtinTMDBKey=$TmdbKey" }
   go build -trimpath -ldflags $serverFlags -o (Join-Path $stage "kinara-server.exe") ./cmd/kinara-server; Check-Exit "go build server"
   go build -trimpath -ldflags "-s -w -H=windowsgui" -o (Join-Path $stage "kinara-tray.exe") ./cmd/kinara-tray; Check-Exit "go build tray"
@@ -162,6 +170,8 @@ if (Test-Path $pin) {
   }
   Write-Host "SHA-256 matches the pinned value."
 } else {
+  # In the release workflow nobody is there to answer: the pin must be committed.
+  if ($env:CI) { throw "No $([IO.Path]::GetFileName($pin)) in the repository. Build once on your PC to record it, then commit it." }
   Write-Host "First build with this FFmpeg: SHA-256 $hash" -ForegroundColor Yellow
   Write-Host "Compare it with the zip from https://www.gyan.dev/ffmpeg/builds/ if you like."
   $ok = Read-Host "Record it in $([IO.Path]::GetFileName($pin)) and continue? (y/n)"

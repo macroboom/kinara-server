@@ -65,6 +65,31 @@ macOS builds from GitHub and records their SHA-256 in
 that doesn't match. The script also refuses an FFmpeg that links anything
 other than the system's own libraries, since other Macs wouldn't have it.
 
+## Release workflow (GitHub Actions)
+
+Pushing a tag (`v0.2.0`) builds this package on GitHub's Macs too, signed and
+notarized, next to the Windows and Linux builds, and publishes it to
+dl.kinara.media (see `.github/workflows/release.yml`). It needs your
+certificates as repository secrets (Settings, Secrets and variables,
+Actions), once:
+
+1. **The certificates.** In Keychain Access, My Certificates, select both
+   Developer ID certificates (each with its key), right-click, Export 2
+   items, as `certs.p12` with a password. Then:
+   ```bash
+   base64 -i certs.p12 | pbcopy
+   ```
+   and paste it as the secret **MACOS_CERTS_P12**. The password goes in
+   **MACOS_CERTS_PASSWORD**. Delete `certs.p12` afterwards (keep your backup
+   copy somewhere safe).
+2. **Notarizing.** **APPLE_ID** (the Apple ID email), **APPLE_TEAM_ID**
+   (`3ZSCTM7V92`) and **APPLE_APP_PASSWORD** (an app-specific password;
+   make a separate one for GitHub, so it can be revoked on its own).
+
+The run makes a keychain of its own with these and deletes it at the end.
+`ffmpeg-<version>.sha256` must be committed: the workflow won't record a
+checksum by itself.
+
 ## Testing a build
 
 On a Mac that never had Kinara (or after `sudo /usr/local/kinara/uninstall.sh`):

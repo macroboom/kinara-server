@@ -143,6 +143,8 @@ for target in macarm64 mac64; do
     want="$(grep " $file\$" "$sums" | cut -d' ' -f1)"
     [ "$got" = "$want" ] || die "$file doesn't match the checksum recorded in $(basename "$sums"); delete dist/cache/$file to download it again"
   else
+    # In the release workflow, a checksum nobody looked at isn't a check.
+    [ -z "${CI:-}" ] || die "no checksum for $file in $(basename "$sums"): build once on the Mac to record it, then commit it"
     printf '%s  %s\n' "$got" "$file" >> "$sums"
     printf 'recorded %s  %s in %s: commit that file, so later builds check it\n' "$got" "$file" "$(basename "$sums")"
   fi

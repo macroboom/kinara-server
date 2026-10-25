@@ -1,10 +1,14 @@
 # Release: push a tag like v0.2.0 (or v0.2.0-rc.1 for a pre-release).
 #
-#   build    the server, the sidecar and the web app on amd64 and arm64,
-#            and a .deb for each (packaging/linux/build.sh)
-#   docker   ghcr.io/macroboom/kinara-server, both architectures
-#   apt      the .debs into https://apt.kinara.media (not for pre-releases)
-#   release  a GitHub release with the .debs attached
+#   build      the server, the sidecar and the web app on amd64 and arm64,
+#              and a .deb for each (packaging/linux/build.sh)
+#   windows    the Windows installer (packaging/windows/build.ps1)
+#   macos      the macOS installer, signed and notarized (packaging/macos/build.sh)
+#   docker     ghcr.io/macroboom/kinara-server, both architectures
+#   apt        the .debs into https://apt.kinara.media (not for pre-releases)
+#   downloads  every installer to https://dl.kinara.media, with server/latest/
+#              and latest.json for the website (packaging/publish-downloads.sh)
+#   release    a GitHub release with every installer attached
 #
 # Run it by hand (Actions > Release > Run workflow) to build and test
 # without publishing anything.
@@ -14,6 +18,14 @@
 #   WEB_REPO_TOKEN    read access to the private kinara-web repository
 #   GPG_PRIVATE_KEY   the APT signing key (armored), and GPG_PASSPHRASE
 #   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
+#   R2_DOWNLOADS_BUCKET   the bucket behind dl.kinara.media (the same R2 token
+#                         needs write access to it)
+# macOS signing and notarizing (packaging/macos/README.md, "Release workflow"):
+#   MACOS_CERTS_P12       both Developer ID certificates with their keys, a .p12
+#                         exported from Keychain Access, base64 encoded
+#   MACOS_CERTS_PASSWORD  the .p12's password
+#   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   for notarytool
+# (Without them a test run builds the macOS installer unsigned; a release stops.)
 name: Release
 
 on:
@@ -127,6 +139,138 @@ jobs:
             dist/docker-entrypoint.sh
           if-no-files-found: error
 
+  windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+
+      # Inside the checkout, at kinara-web: build.ps1 gets it as ..\..\kinara-web.
+      - name: Check out kinara-web (private)
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/kinara-web
+          token: ${{ secrets.WEB_REPO_TOKEN }}
+          path: kinara-web
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sidecar
+          key: windows
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        env:
+          KINARA_TMDB_KEY: ${{ secrets.TMDB_KEY }}
+        run: |
+          $version = if ($env:PUBLISH -eq 'true') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '' }
+          ./packaging/windows/build.ps1 -Version $version -WebRepo '..\..\kinara-web'
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: |
+            packaging/windows/out/*.exe
+            packaging/windows/out/*.sha256
+          if-no-files-found: error
+
+  macos:
+    name: Build (macOS)
+    # Apple silicon; build.sh makes universal binaries for Intel Macs too.
+    runs-on: macos-15
+    env:
+      MACOS_CERTS_P12: ${{ secrets.MACOS_CERTS_P12 }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check out kinara-web (private)
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/kinara-web
+          token: ${{ secrets.WEB_REPO_TOKEN }}
+          path: kinara-web
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sidecar
+          key: macos
+      - uses: oven-sh/setup-bun@v2
+
+      # A keychain of its own for this run, with both Developer ID
+      # certificates and the notarytool login, deleted at the end.
+      - name: Signing keychain
+        if: env.MACOS_CERTS_P12 != ''
+        env:
+          MACOS_CERTS_PASSWORD: ${{ secrets.MACOS_CERTS_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          kc="$RUNNER_TEMP/kinara.keychain-db"
+          pass="$(openssl rand -hex 24)"
+          security create-keychain -p "$pass" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$pass" "$kc"
+          echo "$MACOS_CERTS_P12" | base64 --decode > "$RUNNER_TEMP/certs.p12"
+          security import "$RUNNER_TEMP/certs.p12" -P "$MACOS_CERTS_PASSWORD" -A -f pkcs12 -k "$kc"
+          rm -f "$RUNNER_TEMP/certs.p12"
+          # codesign and productbuild may use the keys without asking.
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pass" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$kc"
+          security find-identity -v | grep "Developer ID"
+          xcrun notarytool store-credentials kinara-notary --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$kc"
+
+      - name: Build
+        env:
+          KINARA_TMDB_KEY: ${{ secrets.TMDB_KEY }}
+          WEB_REPO: ${{ github.workspace }}/kinara-web
+        run: |
+          if [ "$PUBLISH" = true ]; then export VERSION="${GITHUB_REF_NAME#v}"; fi
+          if [ -z "$MACOS_CERTS_P12" ]; then
+            # Every other Mac refuses an unsigned package: a release needs the
+            # secrets; a test run (Run workflow) builds one anyway.
+            if [ "$PUBLISH" = true ]; then
+              echo "::error::No MACOS_CERTS_P12 secret: a release's macOS installer must be signed"
+              exit 1
+            fi
+            echo "::warning::No MACOS_CERTS_P12 secret: building unsigned"
+            export UNSIGNED=1
+          fi
+          bash packaging/macos/build.sh
+
+      - name: Remove the keychain
+        if: always() && env.MACOS_CERTS_P12 != ''
+        run: security delete-keychain "$RUNNER_TEMP/kinara.keychain-db" || true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: |
+            out/*.pkg
+            out/*.sha256
+          if-no-files-found: error
+
   docker:
     name: Docker image
     needs: build
@@ -216,9 +360,38 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: bash packaging/linux/apt/publish.sh out/*.deb
 
+  downloads:
+    name: Downloads (dl.kinara.media)
+    needs: [build, windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: linux-*64
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows
+          path: out
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos
+          path: out
+      - name: Publish
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_DOWNLOADS_BUCKET: ${{ secrets.R2_DOWNLOADS_BUCKET }}
+        run: |
+          ls -l out
+          bash packaging/publish-downloads.sh "$GITHUB_REF_NAME" out/*.exe out/*.pkg out/*.deb
+
   release:
     name: GitHub release
-    needs: [build, docker]
+    needs: [build, windows, macos, docker]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -228,10 +401,20 @@ jobs:
         with:
           pattern: linux-*64
           merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows
+          path: out
+      - uses: actions/download-artifact@v8
+        with:
+          name: macos
+          path: out
       - uses: softprops/action-gh-release@v3
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
             out/*.deb
+            out/*.exe
+            out/*.pkg
             out/*.sha256
