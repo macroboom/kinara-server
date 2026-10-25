@@ -1,0 +1,35 @@
+#!/bin/sh
+# Starts the Kinara server for the signed-in user. launchd runs this at login
+# (~/Library/LaunchAgents/media.kinara.server.plist) and again if it stops.
+#
+# Everything Kinara keeps is in this user's Library:
+#   ~/Library/Application Support/Kinara/   database, settings (kinara.env)
+#   ~/Library/Caches/Kinara/                artwork, converted video, previews
+#   ~/Library/Logs/Kinara/kinara-server.log
+#
+# Settings: edit ~/Library/Application Support/Kinara/kinara.env, then
+#   launchctl kickstart -k gui/$(id -u)/media.kinara.server
+set -eu
+
+app=/usr/local/kinara
+support="$HOME/Library/Application Support/Kinara"
+cache="$HOME/Library/Caches/Kinara"
+logs="$HOME/Library/Logs/Kinara"
+mkdir -p "$support" "$cache" "$logs"
+
+# This user's settings, from the template the first time.
+envfile="$support/kinara.env"
+[ -f "$envfile" ] || cp "$app/kinara.env" "$envfile"
+
+# The settings file can move the data or cache folder; otherwise they're
+# the Library folders above.
+set -a
+# shellcheck disable=SC1090
+. "$envfile"
+set +a
+export KINARA_DATA="${KINARA_DATA:-$support}"
+export KINARA_CACHE="${KINARA_CACHE:-$cache}"
+export KINARA_ENV_FILE="$envfile"
+
+cd "$support"
+exec "$app/kinara-server" serve >>"$logs/kinara-server.log" 2>&1

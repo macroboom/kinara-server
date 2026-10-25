@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+body { font: 13px -apple-system, sans-serif; line-height: 1.45; }
+h2 { font-size: 15px; margin: 0 0 6px; }
+h3 { font-size: 13px; margin: 14px 0 4px; }
+ul { margin: 4px 0; padding-left: 18px; }
+code { font: 12px ui-monospace, Menlo, monospace; }
+</style></head><body>
+<h2>Kinara Server</h2>
+<p>Kinara keeps your movies and shows organised and streams them to the Kinara apps on your TV, phone and the web. Here is everything this installer does, before it does it.</p>
+
+<h3>What it installs</h3>
+<ul>
+<li><code>/usr/local/kinara/</code>: the server, its remote access helper, FFmpeg (for converting video), the web app, and an uninstaller.</li>
+<li>A login item for you, so the server starts when you sign in and keeps running in the background: <code>~/Library/LaunchAgents/media.kinara.server.plist</code>.</li>
+</ul>
+
+<h3>Where it keeps things</h3>
+<ul>
+<li>Library database and settings: <code>~/Library/Application Support/Kinara</code></li>
+<li>Artwork, converted video, previews: <code>~/Library/Caches/Kinara</code> (can grow large; it can be moved in the settings file)</li>
+<li>Logs: <code>~/Library/Logs/Kinara</code></li>
+</ul>
+
+<h3>Network</h3>
+<ul>
+<li>Listens on port 8420 so your devices at home can reach it. macOS asks once whether to allow incoming connections: choose <b>Allow</b>.</li>
+<li>Goes online to TMDB for posters and descriptions. Kinara's cloud (cloud.kinara.media) is only used if you link a Kinara account, for sign-in and remote play.</li>
+<li>Nothing about your library is sent anywhere else.</li>
+</ul>
+
+<h3>Your media</h3>
+<p>Media on an external drive or in your Movies folder just works. For media in Desktop, Documents or Downloads, macOS needs your permission: System Settings, Privacy &amp; Security, Full Disk Access, then add <code>/usr/local/kinara/kinara-server</code>.</p>
+
+<h3>Removing it</h3>
+<p>In Terminal: <code>sudo /usr/local/kinara/uninstall.sh</code>. Your library database and settings are kept unless you delete them.</p>
+</body></html>

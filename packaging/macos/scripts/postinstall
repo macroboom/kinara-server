@@ -1,0 +1,25 @@
+#!/bin/sh
+# Kinara installer, after the files are in: make the server a login item for
+# the user who installed it, start it, and on a first install open its setup
+# page in the browser.
+user="$(stat -f %Su /dev/console)"
+case "$user" in "" | root | loginwindow) exit 0 ;; esac
+uid="$(id -u "$user")"
+home="$(dscl . -read "/Users/$user" NFSHomeDirectory | awk '{print $2}')"
+[ -d "$home" ] || exit 0
+
+agents="$home/Library/LaunchAgents"
+plist="$agents/media.kinara.server.plist"
+first=1
+[ -f "$home/Library/Application Support/Kinara/kinara.db" ] && first=0
+
+sudo -u "$user" mkdir -p "$agents"
+install -m 0644 -o "$user" /usr/local/kinara/media.kinara.server.plist "$plist"
+launchctl bootout "gui/$uid/media.kinara.server" 2>/dev/null || true
+launchctl bootstrap "gui/$uid" "$plist" || true
+
+if [ "$first" = 1 ]; then
+  # Give it a moment to start, then open the setup page as that user.
+  (sleep 4; launchctl asuser "$uid" sudo -u "$user" open "http://localhost:8420") >/dev/null 2>&1 &
+fi
+exit 0

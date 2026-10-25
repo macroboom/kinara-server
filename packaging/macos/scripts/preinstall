@@ -1,0 +1,8 @@
+#!/bin/sh
+# Kinara installer, before the files go in: stop a running server (an
+# upgrade), so its files can be replaced.
+user="$(stat -f %Su /dev/console)"
+case "$user" in "" | root | loginwindow) exit 0 ;; esac
+uid="$(id -u "$user")"
+launchctl bootout "gui/$uid/media.kinara.server" 2>/dev/null || true
+exit 0

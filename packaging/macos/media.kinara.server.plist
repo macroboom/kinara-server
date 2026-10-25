@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Starts the Kinara server when this user signs in, and again if it stops.
+  The installer copies it to ~/Library/LaunchAgents for the user who
+  installed Kinara. To stop it for now:
+    launchctl bootout gui/$(id -u)/media.kinara.server
+  and to start it again:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/media.kinara.server.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>media.kinara.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/kinara/kinara-launch</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Started again unless it stopped on purpose. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <!-- Only for a signed-in desktop session. -->
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ProcessType</key>
+  <string>Standard</string>
+</dict>
+</plist>
