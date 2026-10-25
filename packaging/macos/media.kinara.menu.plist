@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Puts the Kinara icon in the menu bar when this user signs in (the login
+  argument below means: without opening the web app). The installer copies it to
+  ~/Library/LaunchAgents next to media.kinara.server.plist.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>media.kinara.menu</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/Kinara.app/Contents/MacOS/Kinara</string>
+    <string>--login</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+</dict>
+</plist>

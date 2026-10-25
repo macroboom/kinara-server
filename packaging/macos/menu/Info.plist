@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Kinara.app, the menu bar item. build.sh fills in ${VERSION}. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>media.kinara.menu</string>
+  <key>CFBundleName</key>
+  <string>Kinara</string>
+  <key>CFBundleDisplayName</key>
+  <string>Kinara</string>
+  <key>CFBundleExecutable</key>
+  <string>Kinara</string>
+  <key>CFBundleIconFile</key>
+  <string>Kinara</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${VERSION}</string>
+  <key>CFBundleVersion</key>
+  <string>${VERSION}</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
+  <!-- A menu bar item: no Dock icon, no app menu. -->
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>Macroboom LLC</string>
+</dict>
+</plist>

@@ -11,10 +11,16 @@ It says all of this on its first page, before anything happens.
 - Installs `/usr/local/kinara/`: `kinara-server`, `kinara-iroh` (remote
   access), `ffmpeg/` (Jellyfin's FFmpeg: VideoToolbox hardware encoding,
   HDR tone mapping), `web/`, `kinara-launch`, `kinara.env` (the settings
-  template), the login item and `uninstall.sh`.
-- Makes the server a login item for the user who installs it
-  (`~/Library/LaunchAgents/media.kinara.server.plist`), starts it, and on a
-  first install opens `http://localhost:8420` for setup.
+  template), the login items and `uninstall.sh`.
+- Installs `/Applications/Kinara.app`, the menu bar item (`menu/main.swift`):
+  shows whether the server is running, with Open Kinara, Restart, Stop or
+  Start, Show Log and Edit Settings. Opening it from Applications or
+  Launchpad opens the web app (and starts the server if it was stopped).
+  "Hide Menu Bar Icon" quits only the icon; the server keeps running.
+- Makes the server and the menu bar item login items for the user who
+  installs it (`~/Library/LaunchAgents/media.kinara.server.plist` and
+  `media.kinara.menu.plist`), starts both, and on a first install opens
+  `http://localhost:8420` for setup.
 - Keeps everything in that user's Library: data and `kinara.env` in
   `Application Support/Kinara`, the cache in `Caches/Kinara`, the log in
   `Logs/Kinara`.

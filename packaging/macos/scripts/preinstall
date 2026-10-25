@@ -1,8 +1,11 @@
 #!/bin/sh
-# Kinara installer, before the files go in: stop a running server (an
-# upgrade), so its files can be replaced.
+# Kinara installer, before the files go in: stop a running server and menu
+# bar item (an upgrade), so their files can be replaced.
 user="$(stat -f %Su /dev/console)"
 case "$user" in "" | root | loginwindow) exit 0 ;; esac
 uid="$(id -u "$user")"
 launchctl bootout "gui/$uid/media.kinara.server" 2>/dev/null || true
+launchctl bootout "gui/$uid/media.kinara.menu" 2>/dev/null || true
+# Opened from Applications rather than at login: not under launchd.
+pkill -x Kinara 2>/dev/null || true
 exit 0

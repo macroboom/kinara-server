@@ -1,7 +1,7 @@
 #!/bin/sh
-# Kinara installer, after the files are in: make the server a login item for
-# the user who installed it, start it, and on a first install open its setup
-# page in the browser.
+# Kinara installer, after the files are in: make the server and the menu bar
+# item login items for the user who installed Kinara, start both, and on a
+# first install open the setup page in the browser.
 user="$(stat -f %Su /dev/console)"
 case "$user" in "" | root | loginwindow) exit 0 ;; esac
 uid="$(id -u "$user")"
@@ -9,14 +9,16 @@ home="$(dscl . -read "/Users/$user" NFSHomeDirectory | awk '{print $2}')"
 [ -d "$home" ] || exit 0
 
 agents="$home/Library/LaunchAgents"
-plist="$agents/media.kinara.server.plist"
 first=1
 [ -f "$home/Library/Application Support/Kinara/kinara.db" ] && first=0
 
 sudo -u "$user" mkdir -p "$agents"
-install -m 0644 -o "$user" /usr/local/kinara/media.kinara.server.plist "$plist"
-launchctl bootout "gui/$uid/media.kinara.server" 2>/dev/null || true
-launchctl bootstrap "gui/$uid" "$plist" || true
+for label in media.kinara.server media.kinara.menu; do
+  plist="$agents/$label.plist"
+  install -m 0644 -o "$user" "/usr/local/kinara/$label.plist" "$plist"
+  launchctl bootout "gui/$uid/$label" 2>/dev/null || true
+  launchctl bootstrap "gui/$uid" "$plist" || true
+done
 
 if [ "$first" = 1 ]; then
   # Give it a moment to start, then open the setup page as that user.

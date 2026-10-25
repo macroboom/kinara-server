@@ -15,9 +15,12 @@
 #   /usr/local/kinara/kinara.env          the settings file every user starts from
 #   /usr/local/kinara/media.kinara.server.plist   the login item (LaunchAgent)
 #   /usr/local/kinara/uninstall.sh
+#   /Applications/Kinara.app             the menu bar item (menu/main.swift): status,
+#                                         Open Kinara, Restart, Stop, log, settings
 #
-# The installer puts the login item in the installing user's
-# ~/Library/LaunchAgents and starts the server; see scripts/postinstall.
+# The installer puts the login items (server and menu bar item) in the
+# installing user's ~/Library/LaunchAgents and starts them; see
+# scripts/postinstall.
 #
 # Run on a Mac:   packaging/macos/build.sh
 #
@@ -183,12 +186,26 @@ else
   cp -R "$webrepo/dist" "$app/web"
 fi
 
+# --- Kinara.app, the menu bar item -------------------------------------------------------
+
+step "Kinara.app (swiftc, arm64 and x86_64)"
+bundle="$root/Applications/Kinara.app"
+mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
+for t in arm64 x86_64; do
+  xcrun --sdk macosx swiftc -O -target "$t-apple-macos$MACOSX_DEPLOYMENT_TARGET" \
+    -o "$work/Kinara-$t" "$here/menu/main.swift"
+done
+lipo -create "$work/Kinara-arm64" "$work/Kinara-x86_64" -output "$bundle/Contents/MacOS/Kinara"
+sed -e "s|\${VERSION}|$VERSION|g" "$here/menu/Info.plist" > "$bundle/Contents/Info.plist"
+cp "$here/menu/Kinara.icns" "$here/menu/MenuIcon.png" "$here/menu/MenuIcon@2x.png" "$bundle/Contents/Resources/"
+
 # --- The rest of the folder ---------------------------------------------------------------
 
 install -m 0755 "$here/kinara-launch" "$app/kinara-launch"
 install -m 0755 "$here/uninstall.sh" "$app/uninstall.sh"
 install -m 0644 "$here/kinara.env" "$app/kinara.env"
 install -m 0644 "$here/media.kinara.server.plist" "$app/media.kinara.server.plist"
+install -m 0644 "$here/media.kinara.menu.plist" "$app/media.kinara.menu.plist"
 install -m 0644 LICENSE "$app/LICENSE"
 
 # --- Signing ------------------------------------------------------------------------------
@@ -200,13 +217,20 @@ if [ "${UNSIGNED:-}" != 1 ]; then
     codesign --force --options runtime --timestamp --identifier "$id" --sign "$SIGN_APP" "$app/$f"
     codesign --verify --strict "$app/$f"
   done
+  codesign --force --options runtime --timestamp --sign "$SIGN_APP" "$bundle"
+  codesign --verify --deep --strict "$bundle"
 fi
 
 # --- Package ------------------------------------------------------------------------------
 
 step "package (pkgbuild, productbuild)"
-pkgbuild --root "$root" --scripts "$here/scripts" --identifier media.kinara.server \
-  --version "$VERSION" --install-location / --ownership recommended "$work/component.pkg"
+# Kinara.app stays in /Applications: an upgrade doesn't go looking for a
+# copy moved elsewhere (pkgbuild's default for an app bundle).
+pkgbuild --analyze --root "$root" "$work/components.plist" >/dev/null
+plutil -replace 0.BundleIsRelocatable -bool NO "$work/components.plist"
+pkgbuild --root "$root" --component-plist "$work/components.plist" --scripts "$here/scripts" \
+  --identifier media.kinara.server --version "$VERSION" --install-location / \
+  --ownership recommended "$work/component.pkg"
 sed -e "s|\${VERSION}|$VERSION|g" "$here/distribution.xml" > "$work/distribution.xml"
 pkg="$repo/out/Kinara-$VERSION-macOS.pkg"
 rm -f "$pkg"
