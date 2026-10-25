@@ -17,7 +17,7 @@
 .env
 .env.*
 !.env.example
-
+packaging/*/tmdb.key
 # iroh sidecar (Rust): build output and the copied binary
 /sidecar/target/
 /kinara-iroh

@@ -49,7 +49,7 @@ need() { command -v "$1" >/dev/null 2>&1 || die "$1 not found. $2"; }
 need xcrun "Install Xcode, then: sudo xcode-select -s /Applications/Xcode.app"
 need lipo "Install Xcode's command line tools: xcode-select --install"
 
-FFMPEG_VERSION="${FFMPEG_VERSION:-8.1.3-2}"
+FFMPEG_VERSION="${FFMPEG_VERSION:-8.1.3-1}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-kinara-notary}"
 # The oldest macOS the Go toolchain supports.
 export MACOSX_DEPLOYMENT_TARGET=12.0
@@ -210,10 +210,15 @@ pkgbuild --root "$root" --scripts "$here/scripts" --identifier media.kinara.serv
 sed -e "s|\${VERSION}|$VERSION|g" "$here/distribution.xml" > "$work/distribution.xml"
 pkg="$repo/out/Kinara-$VERSION-macOS.pkg"
 rm -f "$pkg"
-sign=()
-[ "${UNSIGNED:-}" = 1 ] || sign=(--sign "$SIGN_INSTALLER" --timestamp)
-productbuild --distribution "$work/distribution.xml" --resources "$here/resources" \
-  --package-path "$work" "${sign[@]}" "$pkg"
+# Two calls, not an empty array: macOS's bash 3.2 treats "${sign[@]}" of an
+# empty array as unset under set -u.
+if [ "${UNSIGNED:-}" = 1 ]; then
+  productbuild --distribution "$work/distribution.xml" --resources "$here/resources" \
+    --package-path "$work" "$pkg"
+else
+  productbuild --distribution "$work/distribution.xml" --resources "$here/resources" \
+    --package-path "$work" --sign "$SIGN_INSTALLER" --timestamp "$pkg"
+fi
 
 if [ "${UNSIGNED:-}" != 1 ]; then
   step "notarizing (Apple checks it; usually a few minutes)"
