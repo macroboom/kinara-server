@@ -201,11 +201,38 @@ type IntroCandidate struct {
 	CreditsChecked bool
 }
 
+// introActiveWindow is how far back watching or new episodes make a show
+// "active" for intro detection.
+const introActiveWindow = 30 * 24 * 60 * 60
+
 // SeasonsNeedingIntros lists season IDs with at least one episode file not
 // yet checked for an intro or end credits (or replaced since), and at least
-// two episodes.
+// two episodes, most wanted first:
+//
+//  1. Shows someone watched in the last 30 days: the season they're on,
+//     then the next ones, most recently watched show first. That's where a
+//     Skip intro button is about to be wanted.
+//  2. Seasons with episodes added in the last 30 days (a show that's
+//     airing), newest first.
+//  3. Earlier seasons of shows being watched (already seen; for rewatches).
+//  4. Everything else, newest additions first.
 func (s *Store) SeasonsNeedingIntros(ctx context.Context, limit int) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT sn.id FROM items sn
+	since := now() - introActiveWindow
+	rows, err := s.db.QueryContext(ctx, `WITH watched AS (
+			SELECT sn.parent_id AS show_id, MAX(w.last_played_at) AS at, MAX(sn.season_number) AS season
+			FROM watch_state w
+			JOIN items e ON e.id = w.item_id AND e.kind = 'episode'
+			JOIN items sn ON sn.id = e.parent_id
+			WHERE w.last_played_at > ?
+			GROUP BY sn.parent_id),
+		fresh AS (
+			SELECT e.parent_id AS season_id, MAX(e.added_at) AS at
+			FROM items e
+			WHERE e.kind = 'episode' AND e.added_at > ?
+			GROUP BY e.parent_id)
+		SELECT sn.id FROM items sn
+		LEFT JOIN watched w ON w.show_id = sn.parent_id
+		LEFT JOIN fresh f ON f.season_id = sn.id
 		WHERE sn.kind = 'season'
 		AND (SELECT COUNT(*) FROM items e JOIN versions v ON v.item_id = e.id
 			WHERE e.parent_id = sn.id AND v.missing = 0) >= 2
@@ -215,8 +242,17 @@ func (s *Store) SeasonsNeedingIntros(ctx context.Context, limit int) ([]string, 
 			WHERE e.parent_id = sn.id AND v.missing = 0 AND v.probe_error = '' AND v.part <= 1
 			AND (n.version_id IS NULL OR n.file_mtime != v.mtime
 				OR c.version_id IS NULL OR c.file_mtime != v.mtime))
-		ORDER BY sn.parent_id, sn.season_number
-		LIMIT ?`, limit)
+		ORDER BY
+			CASE WHEN w.show_id IS NOT NULL AND sn.season_number >= w.season THEN 0
+				WHEN f.season_id IS NOT NULL THEN 1
+				WHEN w.show_id IS NOT NULL THEN 2
+				ELSE 3 END,
+			CASE WHEN w.show_id IS NOT NULL AND sn.season_number >= w.season THEN sn.season_number - w.season ELSE 0 END,
+			COALESCE(w.at, 0) DESC,
+			COALESCE(f.at, 0) DESC,
+			sn.added_at DESC,
+			sn.season_number
+		LIMIT ?`, since, since, limit)
 	if err != nil {
 		return nil, err
 	}
