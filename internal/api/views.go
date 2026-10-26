@@ -17,6 +17,8 @@ type ItemView struct {
 	PosterURL   string            `json:"posterUrl"`
 	BackdropURL string            `json:"backdropUrl"`
 	Watch       *store.WatchState `json:"watch,omitempty"`
+	// Count is how many movies a franchise (kind "collection") has.
+	Count int `json:"count,omitempty"`
 }
 
 // VersionView is a playable file with its tracks and stream URL.

@@ -368,6 +368,7 @@ func itemFilterFrom(r *http.Request, u store.User) store.ItemFilter {
 
 func (s *Server) itemLetters(w http.ResponseWriter, r *http.Request, u store.User) {
 	f := itemFilterFrom(r, u)
+	s.groupFilter(r.Context(), r, &f)
 	letters, err := s.Store.LetterOffsets(r.Context(), f)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())

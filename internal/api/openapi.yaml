@@ -973,6 +973,16 @@ paths:
         - { name: maxRuntime, in: query, schema: { type: integer }, description: Minutes }
         - { name: quality, in: query, schema: { type: string, enum: [best] }, description: Only titles with a 4K or HDR file }
         - { name: q, in: query, schema: { type: string }, description: Title words }
+        - name: collections
+          in: query
+          schema: { type: string, enum: ["1"] }
+          description: |
+            Movie listings without q: with the owner's groupCollections setting
+            on, a franchise with two or more of the listed movies is one item of
+            kind "collection" (id "c" plus TMDB's collection ID, count = its
+            movies) in their place. GET /items/{id} for it answers with the
+            franchise (item) and its movies (items), oldest first. Also for
+            /items/letters.
         - { name: limit, in: query, schema: { type: integer, maximum: 500, default: 100 } }
         - { name: offset, in: query, schema: { type: integer, default: 0 } }
       responses:
@@ -991,7 +1001,11 @@ paths:
   /items/{id}:
     get:
       summary: Item details
-      description: Movies and episodes include their files. Episodes include their season and show. Shows include the next episode.
+      description: |
+        Movies and episodes include their files. Episodes include their season
+        and show. Shows include the next episode. A movie in a franchise with two
+        or more movies on the server includes collection (id, title, count). For a
+        franchise ("c119"): item, and items (its movies, oldest first).
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:

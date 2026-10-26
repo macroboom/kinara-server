@@ -215,6 +215,27 @@ func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
 }
 
 func buildListItems(f ItemFilter) (string, []any) {
+	if grouping(f) {
+		cte, u, args := groupedListing(f)
+		q := "WITH " + cte + " SELECT * FROM (" + u + ") u"
+		switch f.Sort {
+		case "added":
+			q += " ORDER BY added_at DESC, sort_title"
+		case "year":
+			q += " ORDER BY year DESC, sort_title"
+		case "rating":
+			q += " ORDER BY rating DESC, sort_title COLLATE NOCASE"
+		case "length":
+			q += " ORDER BY runtime_min = 0, runtime_min, sort_title COLLATE NOCASE"
+		default:
+			q += " ORDER BY sort_title COLLATE NOCASE, year"
+		}
+		limit := f.Limit
+		if limit <= 0 || limit > 500 {
+			limit = 100
+		}
+		return q + fmt.Sprintf(" LIMIT %d OFFSET %d", limit, max(f.Offset, 0)), args
+	}
 	where, args := itemWhere(f)
 	q := "SELECT " + itemColsI + " FROM items i"
 	if len(where) > 0 {
@@ -333,12 +354,21 @@ func escapeLike(s string) string {
 // LetterOffsets says where each letter starts in the A to Z listing for a
 // filter, for the jump bar. Titles starting with a digit or symbol are "#".
 func (s *Store) LetterOffsets(ctx context.Context, f ItemFilter) ([]LetterOffset, error) {
-	where, args := itemWhere(f)
-	q := "SELECT UPPER(SUBSTR(i.sort_title, 1, 1)) AS l, COUNT(*) FROM items i"
-	if len(where) > 0 {
-		q += " WHERE " + strings.Join(where, " AND ")
+	var q string
+	var args []any
+	if grouping(f) {
+		var cte, u string
+		cte, u, args = groupedListing(f)
+		q = "WITH " + cte + " SELECT UPPER(SUBSTR(sort_title, 1, 1)) AS l, COUNT(*) FROM (" + u + ") u GROUP BY l ORDER BY l"
+	} else {
+		var where []string
+		where, args = itemWhere(f)
+		q = "SELECT UPPER(SUBSTR(i.sort_title, 1, 1)) AS l, COUNT(*) FROM items i"
+		if len(where) > 0 {
+			q += " WHERE " + strings.Join(where, " AND ")
+		}
+		q += " GROUP BY l ORDER BY l"
 	}
-	q += " GROUP BY l ORDER BY l"
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -449,4 +479,39 @@ func nullFloat(f float64) any {
 		return nil
 	}
 	return f
+}
+
+// grouping says whether a listing shows franchises as one item each.
+func grouping(f ItemFilter) bool {
+	return f.GroupCollections && f.Kind == ItemMovie && f.Search == ""
+}
+
+// groupedListing returns the common table expressions (the movies the
+// listing is over that are in a franchise, and the franchises with two or
+// more of them) and the union of the movies not in such a franchise and
+// one row per franchise (newest member's added time, oldest year), with
+// item columns named, for the caller to wrap and order:
+// WITH cte SELECT ... FROM (union) u.
+func groupedListing(f ItemFilter) (cte, union string, args []any) {
+	where, wargs := itemWhere(f)
+	w := strings.Join(where, " AND ")
+	args = wargs
+	q := `m AS (SELECT i.id, ic.collection_id FROM items i JOIN item_collections ic ON ic.item_id = i.id WHERE ` + w + `),
+		g AS (SELECT collection_id FROM m GROUP BY collection_id HAVING COUNT(*) >= 2),
+		gm AS (SELECT m.id, m.collection_id FROM m JOIN g ON g.collection_id = m.collection_id) `
+	movies := `SELECT i.id AS id, i.library_id AS library_id, i.kind AS kind, COALESCE(i.parent_id, '') AS parent_id,
+		i.title AS title, i.sort_title AS sort_title, COALESCE(i.year, 0) AS year,
+		COALESCE(i.season_number, -1) AS season_number, COALESCE(i.episode_number, -1) AS episode_number,
+		i.overview AS overview, COALESCE(i.rating, 0) AS rating, COALESCE(i.runtime_min, 0) AS runtime_min,
+		COALESCE(i.air_date, '') AS air_date, i.match_state AS match_state, COALESCE(i.match_confidence, 0) AS match_confidence,
+		i.parsed_title AS parsed_title, i.parsed_year AS parsed_year, i.added_at AS added_at, i.updated_at AS updated_at
+		FROM items i WHERE ` + w + ` AND i.id NOT IN (SELECT id FROM gm)`
+	franchises := `SELECT 'c' || c.id AS id, MIN(i.library_id) AS library_id, 'collection' AS kind, '' AS parent_id,
+		c.name AS title, c.sort_name AS sort_title, COALESCE(MIN(NULLIF(i.year, 0)), 0) AS year,
+		-1 AS season_number, -1 AS episode_number, c.overview AS overview, 0 AS rating, 0 AS runtime_min,
+		'' AS air_date, 'matched' AS match_state, 1 AS match_confidence, '' AS parsed_title, 0 AS parsed_year,
+		MAX(i.added_at) AS added_at, MAX(c.updated_at, MAX(i.updated_at)) AS updated_at
+		FROM gm JOIN collections c ON c.id = gm.collection_id JOIN items i ON i.id = gm.id GROUP BY c.id`
+	// The filter is used twice: for m, and for the movies listed alone.
+	return q, movies + " UNION ALL " + franchises, append(append([]any{}, args...), args...)
 }

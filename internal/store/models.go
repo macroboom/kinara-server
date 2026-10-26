@@ -207,6 +207,10 @@ type ItemFilter struct {
 	Search string
 	// Genre keeps titles with this TMDB genre ("Comedy").
 	Genre string
+	// GroupCollections lists a franchise's movies as one item of kind
+	// "collection" (when two or more of them are in the listing). Only for
+	// movie listings without a search.
+	GroupCollections bool
 	// IncludeOther includes "Other videos" libraries when no LibraryID is
 	// given (they're left out of Movies, Home rows and so on by default).
 	IncludeOther bool

@@ -99,6 +99,13 @@ func (m *Matcher) MatchLibrary(ctx context.Context, libraryID int64) (Stats, err
 		m.Log.Warn("genre lookup failed", "err", err)
 	}
 
+	if err := m.fillCollections(ctx, libraryID); err != nil {
+		if isAuthError(err) {
+			return st, ErrAuth
+		}
+		m.Log.Warn("franchise lookup failed", "err", err)
+	}
+
 	shows, err := m.Store.ShowsWithPendingEpisodes(ctx, libraryID)
 	if err != nil {
 		return st, err
@@ -202,6 +209,44 @@ func (m *Matcher) fillGenres(ctx context.Context, libraryID int64) error {
 			continue
 		}
 		if err := m.Store.SetGenres(ctx, t.ItemID, tmdb.GenreNames(genres)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// collectionOf is a movie's franchise, as the store keeps it (nil: none).
+func collectionOf(d tmdb.MovieDetails) *store.Collection {
+	c := d.BelongsToCollection
+	if c == nil || c.ID <= 0 || c.Name == "" {
+		return nil
+	}
+	return &store.Collection{ID: c.ID, Name: c.Name, PosterPath: c.PosterPath, BackdropPath: c.BackdropPath}
+}
+
+// fillCollections looks up the franchise of movies matched before
+// franchises were kept (newly matched ones get theirs when matched).
+func (m *Matcher) fillCollections(ctx context.Context, libraryID int64) error {
+	targets, err := m.Store.MoviesNeedingCollection(ctx, libraryID, 1000)
+	if err != nil {
+		return err
+	}
+	for itemID, id := range targets {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		d, err := m.Src.Movie(ctx, id)
+		var se *tmdb.StatusError
+		switch {
+		case errors.As(err, &se) && se.Code == 404:
+		case err != nil:
+			if isAuthError(err) {
+				return err
+			}
+			m.Log.Warn("franchise lookup", "item", itemID, "err", err)
+			continue
+		}
+		if err := m.Store.SetCollection(ctx, itemID, collectionOf(d)); err != nil {
 			return err
 		}
 	}
@@ -315,6 +360,9 @@ func (m *Matcher) matchMovie(ctx context.Context, it store.Item) (bool, error) {
 		_ = m.Store.SetExternalID(ctx, it.ID, store.ProviderIMDB, d.IMDBID)
 	}
 	if err := m.Store.SetGenres(ctx, it.ID, tmdb.GenreNames(d.Genres)); err != nil {
+		return false, err
+	}
+	if err := m.Store.SetCollection(ctx, it.ID, collectionOf(d)); err != nil {
 		return false, err
 	}
 	m.setImage(ctx, it.ID, "poster", d.PosterPath)

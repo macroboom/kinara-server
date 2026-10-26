@@ -490,6 +490,7 @@ func (s *Server) rematchLibrary(w http.ResponseWriter, r *http.Request, u store.
 
 func (s *Server) listItems(w http.ResponseWriter, r *http.Request, u store.User) {
 	f := itemFilterFrom(r, u)
+	s.groupFilter(r.Context(), r, &f)
 	items, err := s.Store.ListItems(r.Context(), f)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -500,6 +501,7 @@ func (s *Server) listItems(w http.ResponseWriter, r *http.Request, u store.User)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.fillCounts(r.Context(), views)
 	resp := map[string]any{"items": views}
 	if len(items) == f.Limit {
 		resp["nextOffset"] = f.Offset + f.Limit
@@ -544,6 +546,10 @@ func (s *Server) nextUp(r *http.Request, profileID int64, showID string) (*nextU
 }
 
 func (s *Server) getItem(w http.ResponseWriter, r *http.Request, u store.User) {
+	if id, ok := store.CollectionID(r.PathValue("id")); ok {
+		s.getCollection(w, r, u, id)
+		return
+	}
 	it, err := s.Store.GetItem(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "item not found")
@@ -578,6 +584,11 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request, u store.User) {
 			resp["lists"] = lists
 		}
 	}
+	if it.Kind == store.ItemMovie {
+		if c := s.movieCollection(r.Context(), it.ID); c != nil {
+			resp["collection"] = c
+		}
+	}
 	if it.Kind != store.ItemSeason {
 		top := s.topLevelID(r, it)
 		if g, err := s.Store.Genres(r.Context(), []string{top}); err == nil {
@@ -598,6 +609,10 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request, u store.User) {
 }
 
 func (s *Server) itemChildren(w http.ResponseWriter, r *http.Request, u store.User) {
+	if id, ok := store.CollectionID(r.PathValue("id")); ok {
+		s.collectionChildren(w, r, u, id)
+		return
+	}
 	items, err := s.Store.ListItems(r.Context(), store.ItemFilter{ParentID: r.PathValue("id"), Limit: 500})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -936,6 +951,9 @@ func (p plainReader) Seek(off int64, whence int) (int64, error) { return p.f.See
 // imageFallbacks: a season without a poster uses its show's; an episode
 // without a still uses its season's poster.
 func (s *Server) imageSource(r *http.Request, id, kind string) (string, error) {
+	if cid, ok := store.CollectionID(id); ok {
+		return s.collectionImage(r.Context(), cid, kind), nil
+	}
 	for range 3 {
 		url, err := s.Store.ImageURL(r.Context(), id, kind)
 		if err != nil || url != "" {
