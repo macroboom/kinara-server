@@ -17,6 +17,7 @@ import (
 	"kinara/internal/parse"
 	"kinara/internal/probe"
 	"kinara/internal/store"
+	"kinara/internal/subs"
 )
 
 // ErrBusy is returned when a library is already being scanned.
@@ -302,11 +303,11 @@ func (s *Scanner) run(ctx context.Context, libraryID int64, only string) error {
 	}
 
 	walkErr := make(chan error, 1)
-	var unchanged, dropped []string
+	var unchanged, dropped, subtitles []string
 	go func() {
 		defer close(jobs)
 		var err error
-		unchanged, dropped, err = s.walk(ctx, lib, only, known, jobs)
+		unchanged, dropped, err = s.walk(ctx, lib, only, known, jobs, &subtitles)
 		s.update(libraryID, func(p *Progress) {
 			if p.Phase == "walking" {
 				p.Phase = "probing"
@@ -337,6 +338,9 @@ func (s *Scanner) run(ctx context.Context, libraryID int64, only string) error {
 	}
 	if err := s.Store.ForgetVersions(ctx, dropped); err != nil {
 		return err
+	}
+	if err := s.syncSidecars(ctx, lib, only, subtitles); err != nil {
+		s.Log.Warn("subtitle files", "library", lib.Name, "err", err)
 	}
 
 	// What is about to go missing, so the webhooks can be told.
@@ -413,12 +417,12 @@ var discDirs = map[string]bool{"bdmv": true, "video_ts": true, "certificate": tr
 // (extras, samples, disc folders), so stale "can't place" records can be
 // removed. A folder that can't be read fails the scan, so an unplugged
 // drive is never taken as "every file deleted".
-func (s *Scanner) walk(ctx context.Context, lib store.Library, only string, known map[string]store.Version, jobs chan<- job) (unchanged, dropped []string, err error) {
+func (s *Scanner) walk(ctx context.Context, lib store.Library, only string, known map[string]store.Version, jobs chan<- job, subtitles *[]string) (unchanged, dropped []string, err error) {
 	if only != "" {
-		return s.walkFolder(ctx, lib, folderOf(lib, only), only, known, jobs)
+		return s.walkFolder(ctx, lib, folderOf(lib, only), only, known, jobs, subtitles)
 	}
 	for _, root := range lib.Folders {
-		u, d, err := s.walkFolder(ctx, lib, root, root, known, jobs)
+		u, d, err := s.walkFolder(ctx, lib, root, root, known, jobs, subtitles)
 		unchanged = append(unchanged, u...)
 		dropped = append(dropped, d...)
 		if err != nil {
@@ -441,8 +445,8 @@ func folderOf(lib store.Library, path string) string {
 
 // walkFolder walks one library folder (root), or from start, a folder
 // inside it. Paths in the library are relative to the folder the file was
-// found in.
-func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root, start string, known map[string]store.Version, jobs chan<- job) (unchanged, dropped []string, err error) {
+// found in. Subtitle files seen on the way are added to subtitles.
+func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root, start string, known map[string]store.Version, jobs chan<- job, subtitles *[]string) (unchanged, dropped []string, err error) {
 	stable := s.StableAge
 	if stable == 0 {
 		stable = time.Minute
@@ -484,6 +488,10 @@ func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root, start
 			if strings.HasPrefix(name, ".") || skipDirs[lower] {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if !strings.HasPrefix(name, ".") && subs.IsSubtitle(name) {
+			*subtitles = append(*subtitles, path)
 			return nil
 		}
 		if strings.HasPrefix(name, ".") || !parse.IsVideo(name) {
@@ -528,6 +536,51 @@ func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root, start
 		return nil
 	})
 	return unchanged, dropped, err
+}
+
+// syncSidecars matches the subtitle files found to the videos they go
+// with (see subs.Find) and saves them. With only set, just the videos
+// under that folder.
+func (s *Scanner) syncSidecars(ctx context.Context, lib store.Library, only string, found []string) error {
+	versions, err := s.Store.LibraryVersions(ctx, lib.ID)
+	if err != nil {
+		return err
+	}
+	// Each subtitle file could go with videos in its folder, or two or
+	// three folders up when it's in a Subs folder.
+	near := map[string][]string{}
+	for _, p := range found {
+		d := filepath.Dir(p)
+		for i := 0; i < 3 && d != filepath.Dir(d); i++ {
+			near[d] = append(near[d], p)
+			d = filepath.Dir(d)
+		}
+	}
+	perDir := map[string]int{}
+	for p, v := range versions {
+		if !v.Missing {
+			perDir[filepath.Dir(p)]++
+		}
+	}
+	under := ""
+	if only != "" {
+		under = only + string(filepath.Separator)
+	}
+	for p, v := range versions {
+		if v.Missing || (under != "" && !strings.HasPrefix(p, under)) {
+			continue
+		}
+		dir := filepath.Dir(p)
+		var files []store.SubtitleFile
+		for _, sc := range subs.Find(p, near[dir], perDir[dir]) {
+			files = append(files, store.SubtitleFile{Path: sc.Path, Language: sc.Language, Title: sc.Title,
+				Format: sc.Format, Forced: sc.Forced, HearingImpaired: sc.HearingImpaired})
+		}
+		if _, err := s.Store.SyncSidecars(ctx, v.ID, files); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // placeFor says where a parsed file belongs in this library: "movie",

@@ -115,6 +115,8 @@ type Server struct {
 	Restart func(reason string)
 	// restarting is set once a restore is staged.
 	restarting atomic.Bool
+	// subs searches and downloads subtitles (subtitles.go).
+	subs subsState
 
 	limiter *auth.Limiter
 	// tunnelLimiter counts failed sign-ins from all remote devices
@@ -269,6 +271,7 @@ func (s *Server) Handler() http.Handler {
 	s.requestRoutes(mux)
 	s.updateRoutes(mux)
 	s.backupRoutes(mux)
+	s.subtitleRoutes(mux)
 
 	// The web player and manager.
 	mux.Handle("GET /app/", s.webApp())

@@ -79,7 +79,7 @@ func exitErr(err error) error {
 }
 
 var (
-	shell32           = syscall.NewLazyDLL("shell32.dll")
+	shell32            = syscall.NewLazyDLL("shell32.dll")
 	procShellExecuteEx = shell32.NewProc("ShellExecuteExW")
 )
 

@@ -558,7 +558,7 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request, u store.User) {
 
 	switch it.Kind {
 	case store.ItemMovie, store.ItemEpisode:
-		versions, err := s.versionViews(r.Context(), it.ID)
+		versions, err := s.versionViews(r.Context(), it.ID, u)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return

@@ -36,6 +36,9 @@ param(
   # Default: tmdb.key next to this script (git-ignored), else $env:KINARA_TMDB_KEY,
   # else KINARA_TMDB_KEY in the repo's .env (the one the dev server reads).
   [string]$TmdbKey = "",
+  # Kinara's OpenSubtitles.com API key, for finding subtitles. Default:
+  # opensubtitles.key next to this script, else $env:KINARA_OPENSUBTITLES_KEY.
+  [string]$OpenSubtitlesKey = "",
   [switch]$SkipWeb,
   [switch]$SkipSidecar
 )
@@ -101,6 +104,13 @@ try {
   # The version too, so the server reports the release it came from.
   $serverFlags = "-s -w -X main.version=$version"
   if ($TmdbKey) { $serverFlags += " -X main.builtinTMDBKey=$TmdbKey" }
+  if (-not $OpenSubtitlesKey) {
+    $osFile = Join-Path $here "opensubtitles.key"
+    if (Test-Path $osFile) { $OpenSubtitlesKey = (Get-Content $osFile -Raw).Trim() }
+    elseif ($env:KINARA_OPENSUBTITLES_KEY) { $OpenSubtitlesKey = $env:KINARA_OPENSUBTITLES_KEY.Trim() }
+  }
+  if ($OpenSubtitlesKey -match '\s') { throw "the OpenSubtitles key has spaces in it" }
+  if ($OpenSubtitlesKey) { $serverFlags += " -X main.builtinOpenSubtitlesKey=$OpenSubtitlesKey" }
   go build -trimpath -ldflags $serverFlags -o (Join-Path $stage "kinara-server.exe") ./cmd/kinara-server; Check-Exit "go build server"
   go build -trimpath -ldflags "-s -w -H=windowsgui" -o (Join-Path $stage "kinara-tray.exe") ./cmd/kinara-tray; Check-Exit "go build tray"
 } finally { Pop-Location }

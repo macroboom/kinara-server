@@ -17,7 +17,7 @@
 .env
 .env.*
 !.env.example
-packaging/*/tmdb.key
+
 # iroh sidecar (Rust): build output and the copied binary
 /sidecar/target/
 /kinara-iroh
@@ -31,3 +31,6 @@ packaging/*/tmdb.key
 Thumbs.db
 
 /init.mp4
+# Keys built into release builds: never committed
+packaging/*/tmdb.key
+packaging/*/opensubtitles.key

@@ -15,6 +15,8 @@
 #   VERSION          version to stamp (default: the one in cmd/kinara-server/main.go)
 #   KINARA_TMDB_KEY  TMDB key built into the server (default: tmdb.key next to
 #                    this script, else KINARA_TMDB_KEY in the repo's .env, else none)
+#   KINARA_OPENSUBTITLES_KEY  OpenSubtitles.com API key built in (default:
+#                    opensubtitles.key next to this script, else none)
 #   WEB_REPO         the kinara-web checkout (default: ../kinara-web next to this repo)
 #   SKIP_WEB=1       leave the web app out (the server then serves the API and
 #                    its built-in pages only)
@@ -56,6 +58,13 @@ else
   printf 'warning: no TMDB key to build in: titles come from file names, without artwork, until people add their own key\n' >&2
 fi
 
+# Kinara's OpenSubtitles key (finding subtitles), the same way: opensubtitles.key
+# next to this script, else KINARA_OPENSUBTITLES_KEY. Optional.
+oskey="${KINARA_OPENSUBTITLES_KEY:-}"
+if [ -z "$oskey" ] && [ -f "$here/opensubtitles.key" ]; then oskey="$(tr -d '[:space:]' < "$here/opensubtitles.key")"; fi
+case "$oskey" in *[[:space:]]*) die "the OpenSubtitles key has spaces in it" ;; esac
+[ -n "$oskey" ] || printf 'note: no OpenSubtitles key to build in: owners can enter their own under Manage, Subtitles\n' >&2
+
 out="$repo/dist/linux_$arch"
 rm -rf "$out"
 mkdir -p "$out" "$repo/out"
@@ -64,6 +73,7 @@ step "kinara-server (go build)"
 need go "Install Go from https://go.dev/dl/"
 ldflags="-s -w -X main.version=$VERSION"
 [ -n "$key" ] && ldflags="$ldflags -X main.builtinTMDBKey=$key"
+[ -n "$oskey" ] && ldflags="$ldflags -X main.builtinOpenSubtitlesKey=$oskey"
 CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags "$ldflags" -o "$out/kinara-server" ./cmd/kinara-server
 "$out/kinara-server" version
 # The Docker build context is dist/: it needs the entrypoint too.

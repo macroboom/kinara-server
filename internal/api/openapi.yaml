@@ -46,6 +46,35 @@ components:
             titles: { type: integer }
             watched: { type: integer }
         files: { type: array, items: { type: string } }
+    ExternalSubtitle:
+      type: object
+      properties:
+        index: { type: integer, description: "1000000 and up: use it where a track index goes (/subtitles/{versionId}/{index}.vtt)" }
+        language: { type: string, description: ISO 639-2, like the file's tracks }
+        title: { type: string, description: What else the file name says, or the release a download was timed for }
+        format: { type: string, enum: [subrip, ass, ssa, webvtt] }
+        forced: { type: boolean }
+        hearingImpaired: { type: boolean }
+        source: { type: string, enum: [sidecar, download] }
+        url: { type: string, description: The WebVTT }
+        removable: { type: boolean, description: A download this account may delete }
+    SubtitleResult:
+      type: object
+      properties:
+        fileId: { type: integer }
+        language: { type: string }
+        release: { type: string }
+        fileName: { type: string }
+        downloads: { type: integer }
+        rating: { type: number }
+        hearingImpaired: { type: boolean }
+        forced: { type: boolean }
+        ai: { type: boolean, description: An AI translation }
+        machine: { type: boolean, description: A machine translation }
+        trusted: { type: boolean }
+        fps: { type: number }
+        hashMatch: { type: boolean, description: Made for this exact file, so the timing fits }
+        uploader: { type: string }
     UpdateStatus:
       type: object
       properties:
@@ -222,6 +251,13 @@ components:
         streams:
           type: array
           items: { $ref: "#/components/schemas/Stream" }
+        subtitles:
+          type: array
+          description: |
+            Subtitle files outside the video (next to it, or downloaded from
+            OpenSubtitles). Not in streams, whose order matches the player's
+            tracks. Fetch one as WebVTT from its url, like a text track.
+          items: { $ref: "#/components/schemas/ExternalSubtitle" }
         streamUrl: { type: string }
         transcodeUrl: { type: string, description: Converts the file (when the server has ffmpeg) }
         trickplayUrl: { type: string, description: Preview thumbnails (once made) }
@@ -483,6 +519,86 @@ paths:
         "400": { description: That is the library's only folder }
         "404": { description: The folder isn't part of this library }
         "409": { description: A scan is running }
+
+  /subtitles/{versionId}/search:
+    get:
+      summary: Search OpenSubtitles for a movie's or episode's subtitles
+      description: |
+        By the title's TMDB ID (an episode's show, season and episode) and
+        the file's OpenSubtitles hash; best first (made for this file, by a
+        person, most downloaded). Owners can turn this off for other accounts.
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string } }
+        - { name: languages, in: query, schema: { type: string }, description: "Comma separated (en, eng or English); default en" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results: { type: array, items: { $ref: "#/components/schemas/SubtitleResult" } }
+        "403": { description: The owner turned subtitle downloads off for other accounts }
+        "501": { description: No OpenSubtitles API key on this server }
+
+  /subtitles/{versionId}/download:
+    post:
+      summary: Download a search result and keep it with the file, for everyone
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fileId]
+              properties:
+                fileId: { type: integer }
+                language: { type: string }
+                release: { type: string }
+                hearingImpaired: { type: boolean }
+                forced: { type: boolean }
+      responses:
+        "201":
+          description: Downloaded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExternalSubtitle" }
+        "200": { description: Already downloaded }
+        "429": { description: The day's download limit is used up (the account's share, or OpenSubtitles') }
+
+  /subtitles/{versionId}/files/{index}:
+    delete:
+      summary: Remove a downloaded subtitle (owners, or whoever downloaded it)
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string } }
+        - { name: index, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Removed }
+        "409": { description: The file is next to the video; Kinara doesn't delete those }
+
+  /subtitles/settings:
+    get:
+      summary: Subtitle settings (owners only)
+      responses:
+        "200": { description: "everyone, cleanDvd, username, hasPassword, apiKey (last 4), available" }
+    put:
+      summary: Change subtitle settings (owners only)
+      description: Fields left out keep their values. A changed account is tried at once; account says how that went.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                everyone: { type: boolean, description: Every account can search and download (default on) }
+                cleanDvd: { type: boolean, description: Redraw DVD subtitles in Kinara's style (default on) }
+                username: { type: string, description: OpenSubtitles account, for more downloads a day ("" removes it) }
+                password: { type: string }
+                apiKey: { type: string, description: Your own OpenSubtitles API key ("" for Kinara's) }
+      responses:
+        "200": { description: Saved }
 
   /subtitles/{versionId}/{index}/pgs:
     get:

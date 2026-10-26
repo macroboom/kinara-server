@@ -432,7 +432,7 @@ func (s *Server) uiItem(w http.ResponseWriter, r *http.Request, u store.User) {
 			data["Parent"] = parent
 		}
 	}
-	versions, err := s.versionViews(r.Context(), it.ID)
+	versions, err := s.versionViews(r.Context(), it.ID, store.User{})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

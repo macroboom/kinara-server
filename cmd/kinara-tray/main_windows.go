@@ -212,8 +212,8 @@ var app struct {
 	status   atomic.Int32
 	// update is the newer version the server reports ("" for none).
 	update atomic.Value
-	wanted   atomic.Bool // signin mode: we want the server up
-	child    struct {
+	wanted atomic.Bool // signin mode: we want the server up
+	child  struct {
 		sync.Mutex
 		cmd   *exec.Cmd
 		stdin interface{ Close() error }

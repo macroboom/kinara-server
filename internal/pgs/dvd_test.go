@@ -3,6 +3,8 @@ package pgs
 import (
 	"encoding/binary"
 	"fmt"
+	"image/color"
+	"image/png"
 	"math"
 	"os"
 	"os/exec"
@@ -251,6 +253,7 @@ func TestDVDAndDVBWithFFmpeg(t *testing.T) {
 	dir := t.TempDir()
 	idx := writeVobSub(t, dir)
 	x := &Extractor{Tool: &ffmpeg.Tool{}, Dir: filepath.Join(dir, "cache")}
+	x.SetOriginalDVD(true)
 
 	tl := readAll(t, x, "v1", idx, 0, "dvd_subtitle")
 	t.Logf("dvd: %+v", tl)
@@ -277,6 +280,49 @@ func TestDVDAndDVBWithFFmpeg(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Redrawn in Kinara's style (the default): twice the size, white and black.
+	clean := &Extractor{Tool: &ffmpeg.Tool{}, Dir: filepath.Join(dir, "cache-clean")}
+	ctl := readAll(t, clean, "v1", idx, 0, "dvd_subtitle")
+	if ctl.Width != 720*cleanScale || ctl.Height != 480*cleanScale || len(ctl.Events) != 3 {
+		t.Fatalf("clean dvd: %dx%d, %d events", ctl.Width, ctl.Height, len(ctl.Events))
+	}
+	for i, ev := range ctl.Events {
+		im := ev.Images[0]
+		if len(ev.Images) != 1 || abs(im.X-((100+i*10)*cleanScale-cleanPad)) > 2*cleanScale || im.W < 64*cleanScale {
+			t.Errorf("clean event %d: %+v", i, ev.Images)
+		}
+	}
+	f, err := os.Open(clean.ImagePath("v1", 1, 0, ctl.Events[0].Images[0].N))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pic, err := png.Decode(f)
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var white, black int
+	b := pic.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			c := color.NRGBAModel.Convert(pic.At(x, y)).(color.NRGBA)
+			if c.A < 200 {
+				continue
+			}
+			if c.R != c.G || c.G != c.B {
+				t.Fatalf("a coloured pixel %v in a redrawn subtitle", c)
+			}
+			if c.R > 230 {
+				white++
+			} else if c.R < 25 {
+				black++
+			}
+		}
+	}
+	if white == 0 || black == 0 {
+		t.Fatalf("redrawn picture: %d white, %d black pixels", white, black)
+	}
+
 	// DVB: made from the DVD track by ffmpeg, read back through conversion.
 	dvb := filepath.Join(dir, "dvb.mkv")
 	if out, err := exec.Command("ffmpeg", "-v", "error", "-y", "-i", idx, "-map", "0", "-c:s", "dvbsub", dvb).CombinedOutput(); err != nil {
@@ -292,4 +338,11 @@ func TestDVDAndDVBWithFFmpeg(t *testing.T) {
 			t.Errorf("dvb event %d: %+v", i, ev)
 		}
 	}
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

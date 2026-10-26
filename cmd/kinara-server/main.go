@@ -48,7 +48,11 @@
 //	KINARA_IROH            path to kinara-iroh (default: next to the server, or on PATH)
 //	KINARA_TUNNEL_LISTEN   loopback address kinara-iroh delivers connections to (default 127.0.0.1:8421)
 //
-// Updates (checking can also be turned off in the web manager, under Server):
+// Subtitles (also set in the web manager, under Subtitles):
+//
+//	KINARA_OPENSUBTITLES_KEY  an OpenSubtitles.com API key, used instead of the one built into releases
+//
+// Updates (checking can also be turned off in the web manager, under Updates):
 //
 //	KINARA_UPDATE_URL      the list of releases (default https://dl.kinara.media/server/latest.json;
 //	                       off turns update checks off)
@@ -168,6 +172,12 @@ func env(key, def string) string {
 // and empty in the source, so the key never lands in the repository.
 // KINARA_TMDB_KEY (or -tmdb-key) replaces it with your own.
 var builtinTMDBKey string
+
+// builtinOpenSubtitlesKey is Kinara's OpenSubtitles.com API key, for
+// finding subtitles, set like builtinTMDBKey
+// (-X main.builtinOpenSubtitlesKey=<key>). KINARA_OPENSUBTITLES_KEY, or a
+// key the owner enters under Manage, Subtitles, replaces it.
+var builtinOpenSubtitlesKey string
 
 func commonFlags(fs *flag.FlagSet, c *config) {
 	fs.StringVar(&c.dataDir, "data", env("KINARA_DATA", "./kinara-data"), "data folder")
@@ -441,6 +451,9 @@ func serveUntil(parent context.Context, args []string) error {
 			go worker.Run(ctx)
 		}
 	}
+	// Subtitles from OpenSubtitles (with Kinara's key, the owner's own, or
+	// KINARA_OPENSUBTITLES_KEY), and how DVD subtitles look.
+	srv.ApplySubtitleSettings(ctx, env("KINARA_OPENSUBTITLES_KEY", builtinOpenSubtitlesKey))
 	if secs := env("KINARA_WATCH", "60"); secs != "0" && secs != "off" {
 		every, err := strconv.Atoi(secs)
 		if err != nil || every < 10 {

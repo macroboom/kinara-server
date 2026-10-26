@@ -30,6 +30,10 @@ type VersionView struct {
 	// EndCredits is where the end credits are, when they were found:
 	// players offer the next episode from their start.
 	EndCredits *store.EndCredits `json:"endCredits,omitempty"`
+	// Subtitles are subtitle files outside the video: next to it, or
+	// downloaded (see subtitles.go). Not in Streams, whose order matches
+	// what players list.
+	Subtitles []ExternalSubtitle `json:"subtitles"`
 }
 
 func imageURL(id, kind string) string { return "/api/v1/images/" + id + "/" + kind }
@@ -67,7 +71,9 @@ func (s *Server) views(ctx context.Context, profileID int64, items []store.Item)
 	return out, nil
 }
 
-func (s *Server) versionViews(ctx context.Context, itemID string) ([]VersionView, error) {
+// versionViews lists an item's files for an account (u says which
+// downloaded subtitles it may remove; zero for none).
+func (s *Server) versionViews(ctx context.Context, itemID string, u store.User) ([]VersionView, error) {
 	versions, err := s.Store.VersionsForItem(ctx, itemID)
 	if err != nil {
 		return nil, err
@@ -78,7 +84,8 @@ func (s *Server) versionViews(ctx context.Context, itemID string) ([]VersionView
 		if err != nil {
 			return nil, err
 		}
-		vv := VersionView{Version: v, Streams: streams, StreamURL: "/api/v1/stream/" + v.ID}
+		vv := VersionView{Version: v, Streams: streams, StreamURL: "/api/v1/stream/" + v.ID,
+			Subtitles: s.externalSubtitles(ctx, v.ID, u)}
 		if s.Transcoder != nil {
 			vv.TranscodeURL = "/api/v1/transcode/" + v.ID
 		}

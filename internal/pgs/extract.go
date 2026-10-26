@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"image/png"
 	"io"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kinara/internal/ffmpeg"
@@ -64,6 +66,10 @@ type Extractor struct {
 	Log     *slog.Logger
 	// Parallel caps tracks read at once (default 2).
 	Parallel int
+	// original keeps DVD and DVB subtitles as the disc drew them, rather
+	// than redrawn in Kinara's subtitle style (see dvdstyle.go and
+	// SetOriginalDVD).
+	original atomic.Bool
 
 	mu    sync.Mutex
 	jobs  map[string]*job
@@ -82,12 +88,22 @@ type job struct {
 var ErrNoFFmpeg = errors.New("ffmpeg was not found")
 
 // cacheVersion changes when what's stored changes, so old reads are redone
-// (v2: pictures told apart by their pixels; v1 mixed up lines).
-const cacheVersion = 2
+// (v3: DVD and DVB pictures redrawn in Kinara's style; v2: pictures told
+// apart by their pixels; v1 mixed up lines).
+const cacheVersion = 3
 
-func key(versionID string, index int, mtime int64) string {
-	return fmt.Sprintf("v%d-%s-%d-%d", cacheVersion, versionID, index, mtime)
+func (x *Extractor) key(versionID string, index int, mtime int64) string {
+	k := fmt.Sprintf("v%d-%s-%d-%d", cacheVersion, versionID, index, mtime)
+	if x.original.Load() {
+		k += "-o"
+	}
+	return k
 }
+
+// SetOriginalDVD chooses between DVD and DVB subtitles as the disc drew
+// them (true) and redrawn in Kinara's style (false, the default). Tracks
+// read before keep the look they were read with until read again.
+func (x *Extractor) SetOriginalDVD(on bool) { x.original.Store(on) }
 
 // Codecs are the subtitle codecs (as ffprobe names them) the extractor reads.
 var Codecs = map[string]bool{"hdmv_pgs_subtitle": true, "dvd_subtitle": true, "dvb_subtitle": true}
@@ -96,7 +112,7 @@ var Codecs = map[string]bool{"hdmv_pgs_subtitle": true, "dvd_subtitle": true, "d
 // read if it hasn't been. path is the video file; mtime invalidates the
 // cache when the file changes; codec is the track's (see Codecs).
 func (x *Extractor) Timeline(versionID, path string, mtime int64, index int, codec string, from int) (Timeline, error) {
-	k := key(versionID, index, mtime)
+	k := x.key(versionID, index, mtime)
 	dir := filepath.Join(x.Dir, k)
 
 	x.mu.Lock()
@@ -168,7 +184,7 @@ func slice(tl Timeline, from int) Timeline {
 
 // ImagePath is where picture n of a track is, once made.
 func (x *Extractor) ImagePath(versionID string, mtime int64, index, n int) string {
-	return filepath.Join(x.Dir, key(versionID, index, mtime), strconv.Itoa(n)+".png")
+	return filepath.Join(x.Dir, x.key(versionID, index, mtime), strconv.Itoa(n)+".png")
 }
 
 func (x *Extractor) logger() *slog.Logger {
@@ -400,6 +416,7 @@ func (x *Extractor) readDVD(j *job, dir, path string, index int, codec string) e
 		}
 		return 1920, 1080
 	}
+	original := x.original.Load()
 	var pending *Event
 	emit := func(next float64) error {
 		if pending == nil {
@@ -431,19 +448,33 @@ func (x *Extractor) readDVD(j *job, dir, path string, index int, codec string) e
 		if err := emit(start); err != nil {
 			return err
 		}
-		img, ix, iy, key := sp.image(&pal)
+		var img *image.NRGBA
+		var ix, iy int
+		var key string
+		scale := 1
+		if original {
+			img, ix, iy, key = sp.image(&pal)
+		} else {
+			img, ix, iy, key = sp.clean(&pal)
+			scale = cleanScale
+		}
 		if img == nil {
 			return nil // a clearing subpicture: it only ended the one before
 		}
+		// Where the picture ends, in the disc's own frame.
 		b := img.Bounds()
-		if ix+b.Dx() > fw || iy+b.Dy() > fh {
-			if vw, vh := videoFrame(); vw >= ix+b.Dx() && vh >= iy+b.Dy() {
+		right, bottom := ix+b.Dx(), iy+b.Dy()
+		if scale > 1 {
+			right, bottom = (right-cleanPad)/scale, (bottom-cleanPad)/scale
+		}
+		if right > fw || bottom > fh {
+			if vw, vh := videoFrame(); vw >= right && vh >= bottom {
 				fw, fh = vw, vh
 			} else {
-				fw, fh = max(fw, ix+b.Dx()), max(fh, iy+b.Dy())
+				fw, fh = max(fw, right), max(fh, bottom)
 			}
 		}
-		ev := Event{Start: start, Width: fw, Height: fh,
+		ev := Event{Start: start, Width: fw * scale, Height: fh * scale,
 			Images: []Image{{X: ix, Y: iy, Img: img, Forced: sp.forced, Key: key}}}
 		switch {
 		case sp.stop >= 0:

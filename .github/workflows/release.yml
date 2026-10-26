@@ -15,6 +15,7 @@
 #
 # Secrets (Settings > Secrets and variables > Actions), see packaging/linux/README.md:
 #   TMDB_KEY          Kinara's TMDB key, built into the server
+#   OPENSUBTITLES_KEY Kinara's OpenSubtitles.com API key, built in (optional)
 #   WEB_REPO_TOKEN    read access to the private kinara-web repository
 #   GPG_PRIVATE_KEY   the APT signing key (armored), and GPG_PASSPHRASE
 #   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
@@ -101,6 +102,7 @@ jobs:
       - name: Build
         env:
           KINARA_TMDB_KEY: ${{ secrets.TMDB_KEY }}
+          KINARA_OPENSUBTITLES_KEY: ${{ secrets.OPENSUBTITLES_KEY }}
           WEB_REPO: ${{ github.workspace }}/kinara-web
         run: |
           if [ "$PUBLISH" = true ]; then export VERSION="${GITHUB_REF_NAME#v}"; fi
@@ -175,6 +177,7 @@ jobs:
       - name: Build
         env:
           KINARA_TMDB_KEY: ${{ secrets.TMDB_KEY }}
+          KINARA_OPENSUBTITLES_KEY: ${{ secrets.OPENSUBTITLES_KEY }}
         run: |
           $version = if ($env:PUBLISH -eq 'true') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '' }
           ./packaging/windows/build.ps1 -Version $version -WebRepo '..\..\kinara-web'
@@ -244,6 +247,7 @@ jobs:
       - name: Build
         env:
           KINARA_TMDB_KEY: ${{ secrets.TMDB_KEY }}
+          KINARA_OPENSUBTITLES_KEY: ${{ secrets.OPENSUBTITLES_KEY }}
           WEB_REPO: ${{ github.workspace }}/kinara-web
         run: |
           if [ "$PUBLISH" = true ]; then export VERSION="${GITHUB_REF_NAME#v}"; fi

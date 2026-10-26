@@ -643,6 +643,10 @@ func (s *Server) subtitleVTT(w http.ResponseWriter, r *http.Request, u store.Use
 		writeErr(w, http.StatusBadRequest, "bad track")
 		return
 	}
+	if index >= ExternalSubtitleBase {
+		s.serveExternalVTT(w, r, v, index)
+		return
+	}
 	streams, err := s.Store.Streams(r.Context(), v.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
