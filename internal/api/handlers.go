@@ -907,7 +907,7 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, u store.User) {
 // imageColor answers the dominant colour of an item's artwork, for tinting
 // the app's chrome to match it: {"color":"#rrggbb"}, or "" for grey art.
 func (s *Server) imageColor(w http.ResponseWriter, r *http.Request, u store.User) {
-	kind := r.PathValue("kind")
+	kind := artKind(r)
 	if kind != "poster" && kind != "backdrop" && kind != "still" {
 		writeErr(w, http.StatusBadRequest, "kind must be poster, backdrop or still")
 		return
@@ -939,7 +939,7 @@ func (s *Server) imageSource(r *http.Request, id, kind string) (string, error) {
 	for range 3 {
 		url, err := s.Store.ImageURL(r.Context(), id, kind)
 		if err != nil || url != "" {
-			return url, err
+			return s.imageSrc(url), err
 		}
 		it, err := s.Store.GetItem(r.Context(), id)
 		if err != nil || it.ParentID == "" {
@@ -954,7 +954,7 @@ func (s *Server) imageSource(r *http.Request, id, kind string) (string, error) {
 }
 
 func (s *Server) image(w http.ResponseWriter, r *http.Request, u store.User) {
-	kind := r.PathValue("kind")
+	kind := artKind(r)
 	if kind != "poster" && kind != "backdrop" && kind != "still" {
 		writeErr(w, http.StatusBadRequest, "kind must be poster, backdrop or still")
 		return

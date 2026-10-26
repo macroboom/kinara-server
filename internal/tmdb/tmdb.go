@@ -174,6 +174,16 @@ type MovieDetails struct {
 	BackdropPath string  `json:"backdrop_path"`
 	IMDBID       string  `json:"imdb_id"`
 	Genres       []Genre `json:"genres"`
+	// BelongsToCollection is the franchise it's part of (nil when none).
+	BelongsToCollection *CollectionRef `json:"belongs_to_collection"`
+}
+
+// CollectionRef is a movie's franchise, as a movie's details name it.
+type CollectionRef struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	PosterPath   string `json:"poster_path"`
+	BackdropPath string `json:"backdrop_path"`
 }
 
 // Genre is a TMDB genre such as {35, "Comedy"}.
@@ -394,4 +404,87 @@ func (c *Client) GenreList(ctx context.Context, mediaType string) (map[int]strin
 		out[g.ID] = g.Name
 	}
 	return out, nil
+}
+
+// Artwork is one image TMDB has for a title.
+type Artwork struct {
+	FilePath    string  `json:"file_path"`
+	Width       int     `json:"width"`
+	Height      int     `json:"height"`
+	Language    string  `json:"iso_639_1"`
+	VoteAverage float64 `json:"vote_average"`
+	VoteCount   int     `json:"vote_count"`
+}
+
+// Images is a title's artwork: posters and backdrops (movies, shows,
+// seasons), or stills (episodes).
+type Images struct {
+	Posters   []Artwork `json:"posters"`
+	Backdrops []Artwork `json:"backdrops"`
+	Stills    []Artwork `json:"stills"`
+}
+
+// imageLanguages asks for pictures in the client's language, English and
+// ones without text.
+func (c *Client) imageLanguages() url.Values {
+	q := url.Values{}
+	lang := strings.SplitN(c.Language, "-", 2)[0]
+	langs := []string{"null"}
+	if lang != "" {
+		langs = append([]string{lang}, langs...)
+	}
+	if lang != "en" {
+		langs = append(langs, "en")
+	}
+	q.Set("include_image_language", strings.Join(langs, ","))
+	return q
+}
+
+// MovieImages lists a movie's posters and backdrops.
+func (c *Client) MovieImages(ctx context.Context, id int) (Images, error) {
+	var out Images
+	err := c.get(ctx, fmt.Sprintf("/movie/%d/images", id), c.imageLanguages(), &out)
+	return out, err
+}
+
+// TVImages lists a show's posters and backdrops.
+func (c *Client) TVImages(ctx context.Context, id int) (Images, error) {
+	var out Images
+	err := c.get(ctx, fmt.Sprintf("/tv/%d/images", id), c.imageLanguages(), &out)
+	return out, err
+}
+
+// SeasonImages lists a season's posters.
+func (c *Client) SeasonImages(ctx context.Context, tvID, season int) (Images, error) {
+	var out Images
+	err := c.get(ctx, fmt.Sprintf("/tv/%d/season/%d/images", tvID, season), c.imageLanguages(), &out)
+	return out, err
+}
+
+// EpisodeImages lists an episode's stills.
+func (c *Client) EpisodeImages(ctx context.Context, tvID, season, episode int) (Images, error) {
+	var out Images
+	err := c.get(ctx, fmt.Sprintf("/tv/%d/season/%d/episode/%d/images", tvID, season, episode), c.imageLanguages(), &out)
+	return out, err
+}
+
+// Collection is a franchise: its movies, in no particular order.
+type Collection struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	Overview     string `json:"overview"`
+	PosterPath   string `json:"poster_path"`
+	BackdropPath string `json:"backdrop_path"`
+	Parts        []struct {
+		ID          int    `json:"id"`
+		Title       string `json:"title"`
+		ReleaseDate string `json:"release_date"`
+	} `json:"parts"`
+}
+
+// CollectionDetails reads a franchise.
+func (c *Client) CollectionDetails(ctx context.Context, id int) (Collection, error) {
+	var out Collection
+	err := c.get(ctx, fmt.Sprintf("/collection/%d", id), nil, &out)
+	return out, err
 }

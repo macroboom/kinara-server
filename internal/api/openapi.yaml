@@ -1688,6 +1688,84 @@ paths:
       responses:
         "200": { description: Saved }
 
+  /items/{id}/edit:
+    get:
+      summary: A title's editable details (owners only)
+      description: |
+        title, sortTitle, year, overview, rating, airDate, genres; locked (fields
+        edited by hand, which matching leaves alone); art (the kinds of artwork
+        this title has: poster and backdrop, or still for an episode); images
+        (current artwork addresses); canPick (TMDB artwork can be listed).
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK }
+
+  /items/{id}:
+    patch:
+      summary: Edit a title by hand (owners only)
+      description: Fields left out stay. Every field changed is locked, so matching and refreshing from TMDB leave it as edited. Answers like GET /items/{id}/edit.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                sortTitle: { type: string, description: "Follows the title (without The, A or An) unless given" }
+                year: { type: integer }
+                overview: { type: string }
+                rating: { type: number, description: 0 to 10 }
+                airDate: { type: string, description: YYYY-MM-DD }
+                genres: { type: array, items: { type: string } }
+      responses:
+        "200": { description: Saved }
+        "400": { description: Empty title, bad year, date or rating }
+
+  /items/{id}/unlock:
+    post:
+      summary: Give fields back to TMDB (owners only)
+      description: 'Unlocks them ({"fields": ["title", "poster"]} or ["all"]) and refreshes the title from TMDB now.'
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Unlocked }
+
+  /items/{id}/artwork/{kind}:
+    get:
+      summary: TMDB's artwork for a title, best first (owners only)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [poster, backdrop, still] } }
+      responses:
+        "200": { description: "choices: path, url (to show it), width, height, language, votes, current" }
+        "409": { description: The title isn't matched to TMDB }
+
+  /items/{id}/images/{kind}:
+    put:
+      summary: 'Use TMDB artwork: {"path": "/abc.jpg"} from the list (owners only; locks it)'
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [poster, backdrop, still] } }
+      responses:
+        "200": { description: Set }
+
+  /items/{id}/images/{kind}/upload:
+    post:
+      summary: Upload artwork, a JPEG or PNG up to 20 MB as the body (owners only; locks it)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [poster, backdrop, still] } }
+      requestBody:
+        content:
+          image/jpeg: {}
+          image/png: {}
+      responses:
+        "200": { description: Set }
+        "400": { description: Not a JPEG or PNG, or too small }
+
   /backups:
     get:
       summary: Backups, their settings and the next nightly one (owners only)

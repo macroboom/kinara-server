@@ -63,14 +63,23 @@ const (
 	qInsertItem = `INSERT INTO items (id, library_id, kind, parent_id, title, sort_title, year,
 		season_number, episode_number, match_state, parsed_title, parsed_year, added_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	qGetItem         = `SELECT ` + itemCols + ` FROM items WHERE id = ?`
-	qFindByParsed    = `SELECT id FROM items WHERE library_id = ? AND kind = ? AND parsed_title = ? AND parsed_year = ? LIMIT 1`
-	qFindSeason      = `SELECT id FROM items WHERE parent_id = ? AND kind = 'season' AND season_number = ? LIMIT 1`
-	qFindEpisode     = `SELECT id FROM items WHERE parent_id = ? AND kind = 'episode' AND episode_number = ? LIMIT 1`
-	qChildren        = `SELECT ` + itemCols + ` FROM items WHERE parent_id = ? ORDER BY COALESCE(season_number, 0), COALESCE(episode_number, 0), sort_title`
-	qPendingMatch    = `SELECT ` + itemCols + ` FROM items WHERE library_id = ? AND kind IN ('movie', 'show') AND match_state = 'pending' ORDER BY added_at`
-	qUnmatchedItems  = `SELECT ` + itemCols + ` FROM items WHERE library_id = ? AND kind IN ('movie', 'show') AND match_state = 'unmatched' ORDER BY sort_title`
-	qUpdateItemMeta  = `UPDATE items SET title = ?, sort_title = ?, year = ?, overview = ?, rating = ?, runtime_min = ?, air_date = ?, match_state = ?, match_confidence = ?, updated_at = ? WHERE id = ?`
+	qGetItem        = `SELECT ` + itemCols + ` FROM items WHERE id = ?`
+	qFindByParsed   = `SELECT id FROM items WHERE library_id = ? AND kind = ? AND parsed_title = ? AND parsed_year = ? LIMIT 1`
+	qFindSeason     = `SELECT id FROM items WHERE parent_id = ? AND kind = 'season' AND season_number = ? LIMIT 1`
+	qFindEpisode    = `SELECT id FROM items WHERE parent_id = ? AND kind = 'episode' AND episode_number = ? LIMIT 1`
+	qChildren       = `SELECT ` + itemCols + ` FROM items WHERE parent_id = ? ORDER BY COALESCE(season_number, 0), COALESCE(episode_number, 0), sort_title`
+	qPendingMatch   = `SELECT ` + itemCols + ` FROM items WHERE library_id = ? AND kind IN ('movie', 'show') AND match_state = 'pending' ORDER BY added_at`
+	qUnmatchedItems = `SELECT ` + itemCols + ` FROM items WHERE library_id = ? AND kind IN ('movie', 'show') AND match_state = 'unmatched' ORDER BY sort_title`
+	// Fields the owner edited (items.locked, see edit.go) keep their values.
+	qUpdateItemMeta = `UPDATE items SET
+		title = CASE WHEN instr(locked, ',title,') > 0 THEN title ELSE ? END,
+		sort_title = CASE WHEN instr(locked, ',sort_title,') > 0 OR instr(locked, ',title,') > 0 THEN sort_title ELSE ? END,
+		year = CASE WHEN instr(locked, ',year,') > 0 THEN year ELSE ? END,
+		overview = CASE WHEN instr(locked, ',overview,') > 0 THEN overview ELSE ? END,
+		rating = CASE WHEN instr(locked, ',rating,') > 0 THEN rating ELSE ? END,
+		runtime_min = ?,
+		air_date = CASE WHEN instr(locked, ',air_date,') > 0 THEN air_date ELSE ? END,
+		match_state = ?, match_confidence = ?, updated_at = ? WHERE id = ?`
 	qSetMatchState   = `UPDATE items SET match_state = ?, match_confidence = ?, updated_at = ? WHERE id = ?`
 	qResetMatch      = `UPDATE items SET match_state = 'pending', updated_at = ? WHERE id = ?`
 	qDeleteItem      = `DELETE FROM items WHERE id = ?`
@@ -105,7 +114,10 @@ const (
 
 // Images.
 const (
-	qSetImage = `INSERT INTO images (item_id, kind, url) VALUES (?, ?, ?) ON CONFLICT (item_id, kind) DO UPDATE SET url = excluded.url`
+	// Artwork the owner picked (items.locked) isn't replaced.
+	qSetImage = `INSERT INTO images (item_id, kind, url)
+		SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM items WHERE id = ?1 AND instr(locked, ',' || ?2 || ',') > 0)
+		ON CONFLICT (item_id, kind) DO UPDATE SET url = excluded.url`
 	qGetImage = `SELECT url FROM images WHERE item_id = ? AND kind = ?`
 )
 

@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 
 	"kinara/internal/store"
 )
@@ -38,15 +41,29 @@ type VersionView struct {
 
 func imageURL(id, kind string) string { return "/api/v1/images/" + id + "/" + kind }
 
+// artURL is an item's artwork address with a version after "~" (from when
+// the item last changed), so apps and browsers that keep pictures for a
+// week fetch a new one when the owner picks different artwork. The server
+// ignores the version (see artKind).
+func artURL(it store.Item, kind string) string {
+	return imageURL(it.ID, kind) + "~" + strconv.FormatInt(it.UpdatedAt, 36)
+}
+
+// artKind is the {kind} of an artwork address without its version.
+func artKind(r *http.Request) string {
+	k, _, _ := strings.Cut(r.PathValue("kind"), "~")
+	return k
+}
+
 func viewOf(it store.Item, w *store.WatchState) ItemView {
 	v := ItemView{Item: it, Watch: w}
 	switch it.Kind {
 	case store.ItemEpisode:
-		v.PosterURL = imageURL(it.ID, "still")
+		v.PosterURL = artURL(it, "still")
 	default:
-		v.PosterURL = imageURL(it.ID, "poster")
+		v.PosterURL = artURL(it, "poster")
 	}
-	v.BackdropURL = imageURL(it.ID, "backdrop")
+	v.BackdropURL = artURL(it, "backdrop")
 	return v
 }
 

@@ -10,6 +10,8 @@
 //	                   reference; restoring doesn't put it back unless asked)
 //	cloud/...          the link to the owner's Kinara account
 //	iroh/secret.key    the remote access identity, so devices keep finding it
+//	artwork/...        pictures the owner uploaded for titles
+//	subtitles/...      subtitles downloaded from OpenSubtitles
 //
 // The cache (artwork, previews, conversions) isn't in it: the server
 // rebuilds that. Media files never are.
@@ -104,8 +106,9 @@ func (m *Manager) log() *slog.Logger {
 }
 
 // identity is what besides the database a backup keeps, relative to the
-// data folder: the account link and the remote access key.
-var identity = []string{"cloud", "iroh"}
+// data folder: the account link, the remote access key, uploaded artwork
+// and downloaded subtitles.
+var identity = []string{"cloud", "iroh", "artwork", "subtitles"}
 
 // Create makes a backup in dir and returns it.
 func (m *Manager) Create(ctx context.Context, dir, reason string) (Info, error) {

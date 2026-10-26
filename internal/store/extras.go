@@ -28,6 +28,14 @@ func (s *Store) SetGenres(ctx context.Context, itemID string, genres []string) e
 		return err
 	}
 	defer tx.Rollback()
+	// Genres the owner set by hand stay; only the fetch is recorded.
+	var locked int
+	if err := tx.QueryRowContext(ctx, `SELECT instr(locked, ',genres,') FROM items WHERE id = ?`, itemID).Scan(&locked); err == nil && locked > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE items SET genres_at = ? WHERE id = ?`, now(), itemID); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM item_genres WHERE item_id = ?`, itemID); err != nil {
 		return err
 	}

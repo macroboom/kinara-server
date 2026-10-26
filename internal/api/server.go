@@ -272,6 +272,7 @@ func (s *Server) Handler() http.Handler {
 	s.updateRoutes(mux)
 	s.backupRoutes(mux)
 	s.subtitleRoutes(mux)
+	s.editRoutes(mux)
 
 	// The web player and manager.
 	mux.Handle("GET /app/", s.webApp())

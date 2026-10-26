@@ -78,12 +78,12 @@ func (s *Server) serveExternalVTT(w http.ResponseWriter, r *http.Request, v stor
 		writeErr(w, http.StatusNotFound, "no subtitle file with that index")
 		return
 	}
-	fi, err := os.Stat(f.Path)
+	fi, err := os.Stat(s.dataPath(f.Path))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "the subtitle file isn't there any more")
 		return
 	}
-	vtt, err := s.Subtitles.VTTFile(r.Context(), fmt.Sprintf("%s-x%d", v.ID, f.ID), f.Path, fi.ModTime().Unix())
+	vtt, err := s.Subtitles.VTTFile(r.Context(), fmt.Sprintf("%s-x%d", v.ID, f.ID), s.dataPath(f.Path), fi.ModTime().Unix())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -379,7 +379,7 @@ func (s *Server) downloadSubtitle(w http.ResponseWriter, r *http.Request, u stor
 	have, _ := s.Store.SubtitleFiles(r.Context(), v.ID)
 	for _, f := range have {
 		if f.Source == store.SubtitleDownload && f.ProviderID == provider {
-			if _, err := os.Stat(f.Path); err == nil {
+			if _, err := os.Stat(s.dataPath(f.Path)); err == nil {
 				writeJSON(w, http.StatusOK, externalOf(v.ID, f, u))
 				return
 			}
@@ -432,7 +432,10 @@ func (s *Server) downloadSubtitle(w http.ResponseWriter, r *http.Request, u stor
 	if len(title) > 80 {
 		title = title[:80]
 	}
-	f := store.SubtitleFile{VersionID: v.ID, Path: path, Language: lang, Title: title, Format: "subrip",
+	// Kept relative to the data folder, so a backup restored on another
+	// computer still finds it.
+	rel := dataPrefix + filepath.ToSlash(filepath.Join("subtitles", v.ID, name+".srt"))
+	f := store.SubtitleFile{VersionID: v.ID, Path: rel, Language: lang, Title: title, Format: "subrip",
 		Forced: req.Forced, HearingImpaired: req.HearingImpaired, Source: store.SubtitleDownload,
 		ProviderID: provider, AddedBy: u.ID}
 	if err := s.Store.AddSubtitleFile(r.Context(), &f); err != nil {
@@ -473,6 +476,29 @@ func (s *Server) deleteSubtitleFile(w http.ResponseWriter, r *http.Request, u st
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	_ = os.Remove(f.Path)
+	_ = os.Remove(s.dataPath(f.Path))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// dataPrefix marks a path inside the data folder ("kinara-data:artwork/x.png"):
+// files Kinara keeps itself are recorded this way, not by full path, so a
+// backup restored on another computer (or a moved data folder) still finds
+// them.
+const dataPrefix = "kinara-data:"
+
+// dataPath turns a recorded path into one on disk.
+func (s *Server) dataPath(p string) string {
+	if rel, ok := strings.CutPrefix(p, dataPrefix); ok {
+		return filepath.Join(s.DataDir, filepath.FromSlash(rel))
+	}
+	return p
+}
+
+// imageSrc turns an artwork address kept in the database into one the
+// image cache reads ("file:" for files in the data folder).
+func (s *Server) imageSrc(u string) string {
+	if strings.HasPrefix(u, dataPrefix) {
+		return "file:" + s.dataPath(u)
+	}
+	return u
 }
