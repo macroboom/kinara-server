@@ -5,6 +5,8 @@
 //
 //	Kinara is running            (status, not clickable)
 //	Open Kinara                  opens the web app in the browser
+//	Update to Kinara X…          when a newer version is out: opens the
+//	                             Manage page, which installs it
 //	Start / Stop / Restart server
 //	Open data folder, Open logs
 //	Quit
@@ -23,6 +25,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -136,6 +139,7 @@ const (
 	cmdLogs
 	cmdUninstall
 	cmdQuit
+	cmdUpdate
 )
 
 type point struct{ X, Y int32 }
@@ -206,6 +210,8 @@ var app struct {
 	exeDir   string
 	port     string
 	status   atomic.Int32
+	// update is the newer version the server reports ("" for none).
+	update atomic.Value
 	wanted   atomic.Bool // signin mode: we want the server up
 	child    struct {
 		sync.Mutex
@@ -404,6 +410,9 @@ func showMenu() {
 	add(0, statusText(), false)
 	sep()
 	add(cmdOpen, "Open Kinara", st == stRunning)
+	if v := newerVersion(); v != "" && st == stRunning {
+		add(cmdUpdate, "Update to Kinara "+v+"…", true)
+	}
 	sep()
 	add(cmdStart, "Start server", st == stStopped || st == stUnknown)
 	add(cmdStop, "Stop server", st == stRunning || st == stStarting)
@@ -430,6 +439,8 @@ func showMenu() {
 	switch int(cmd) {
 	case cmdOpen:
 		openApp()
+	case cmdUpdate:
+		shellOpen("http://localhost:" + app.port + "/app/#/manage/updates")
 	case cmdStart:
 		go startServer()
 	case cmdStop:
@@ -453,6 +464,11 @@ func showMenu() {
 }
 
 func openApp() { shellOpen("http://localhost:" + app.port + "/") }
+
+func newerVersion() string {
+	v, _ := app.update.Load().(string)
+	return v
+}
 
 // runUninstaller starts the uninstaller Inno Setup wrote next to the tray
 // (unins000.exe; a higher number if an install was ever repaired). It asks
@@ -491,8 +507,14 @@ func openWhenUp() {
 func watch() {
 	client := &http.Client{Timeout: 2 * time.Second}
 	last := stUnknown
+	told := ""
 	for {
 		st := probe(client)
+		// Say once per version that an update is out.
+		if v := newerVersion(); v != "" && v != told {
+			told = v
+			notify("Kinara "+v+" is out", "Choose Update in the Kinara menu to install it. Your library and settings stay.", false)
+		}
 		if st != last {
 			app.status.Store(st)
 			pPostMessage.Call(app.hwnd, wmStatus, 0, 0)
@@ -513,8 +535,15 @@ func watch() {
 func probe(client *http.Client) int32 {
 	healthy := false
 	if resp, err := client.Get("http://127.0.0.1:" + app.port + "/api/v1/health"); err == nil {
-		resp.Body.Close()
 		healthy = resp.StatusCode == http.StatusOK
+		if healthy {
+			var h struct {
+				Update string `json:"update"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&h)
+			app.update.Store(h.Update)
+		}
+		resp.Body.Close()
 	}
 	if app.mode == "signin" {
 		app.child.Lock()

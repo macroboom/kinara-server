@@ -64,6 +64,22 @@ Upgrades keep the folders, mode and account picked last time, stop the server
 and tray first, and never change a service account set by hand in
 `services.msc` unless a different one is picked in the wizard.
 
+## Updates
+
+The server checks `dl.kinara.media/server/latest.json` twice a day (the
+owner can turn this off under Manage, Updates, or with
+`KINARA_UPDATE_URL=off`). When a newer version is out, the Manage pages
+show it and the tray says so once and adds "Update to Kinara X…".
+**Update** downloads `Kinara-Setup-<version>-x64.exe` into the cache's
+`updates` folder, checks its size and SHA-256 against latest.json, and runs
+it with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /AUTOUPDATE=1` (log:
+`updates\install.log`). The service starts it directly; in sign-in mode the
+server asks Windows to run it as administrator, so the UAC prompt shows on
+that PC. The installer keeps the previous folders, mode and tasks, stops
+the server, installs, and starts the service again (or, with
+`/AUTOUPDATE=1`, the tray in sign-in mode). The new server deletes the
+installer when it starts.
+
 ## Uninstalling
 
 Start menu > Kinara > **Remove Kinara**, **Uninstall Kinara…** in the tray

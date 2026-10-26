@@ -22,6 +22,23 @@ components:
       type: object
       properties:
         error: { type: string }
+    UpdateStatus:
+      type: object
+      properties:
+        current: { type: string, description: This server's version }
+        latest: { type: string, description: The newest release (once checked) }
+        available: { type: boolean, description: latest is newer than current }
+        date: { type: string, description: When latest came out (YYYY-MM-DD) }
+        notes: { type: string, description: Link to what's new }
+        checkedAt: { type: integer, description: Unix seconds of the last check that answered (0 never) }
+        error: { type: string, description: Why the last check failed }
+        kind: { type: string, enum: [windows, macos, deb, docker, other], description: How this copy was installed }
+        canInstall: { type: boolean, description: Kinara can install the update itself (Windows and macOS installs) }
+        how: { type: string, description: "What to do when it can't: the apt or docker command, or where to download" }
+        state: { type: string, enum: [idle, downloading, verifying, installing, failed] }
+        message: { type: string, description: Why an install failed }
+        downloaded: { type: integer, description: Bytes so far, while downloading }
+        size: { type: integer, description: The installer's size }
     DeviceInfo:
       type: object
       description: >
@@ -287,6 +304,7 @@ paths:
                   version: { type: string }
                   setupDone: { type: boolean }
                   metadata: { type: boolean, description: Whether a TMDB key is set }
+                  update: { type: string, description: "A newer version that's out, when there is one. Only on the server's own network (the tray and the menu bar item read it)." }
 
   /auth/login:
     post:
@@ -1521,10 +1539,54 @@ paths:
                 properties:
                   listAccounts: { type: boolean, description: Show accounts on the sign-in screen }
                   allowSignup: { type: boolean, description: Let anyone who reaches the server make an account }
+                  priorityDevice: { type: string, description: The device that keeps its quality when the server is busy converting }
+                  updateCheck: { type: boolean, description: Check the downloads site twice a day for a newer Kinara (default on) }
+                  groupCollections: { type: boolean, description: Show a franchise's movies as one card in movie libraries (default on) }
     put:
       summary: Save server settings (owners only)
+      description: Fields left out keep their values.
       responses:
         "200": { description: Saved }
+
+  /update:
+    get:
+      summary: Whether a newer Kinara is out, and any install in progress (owners only)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateStatus" }
+
+  /update/check:
+    post:
+      summary: Check for a newer Kinara now (owners only)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateStatus" }
+
+  /update/install:
+    post:
+      summary: Download and install the newer Kinara (owners only; Windows and macOS installs)
+      description: |
+        Downloads the installer for this computer, checks its size and
+        SHA-256 (and on macOS that Macroboom LLC signed it and Apple
+        notarized it), then starts it. On Windows it runs silently (in
+        sign-in mode Windows asks for permission on that PC); on a Mac,
+        macOS asks for an administrator's password there. The server
+        restarts as the new version; the installer is deleted afterwards.
+        Follow progress with GET /update.
+      responses:
+        "202":
+          description: Started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpdateStatus" }
+        "409": { description: Nothing to install, or this install is updated another way (apt, docker) }
+        "429": { description: Already installing }
 
   /hls/{id}:
     post:

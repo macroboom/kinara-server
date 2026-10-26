@@ -34,6 +34,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if s.Remote != nil {
 		resp["remote"] = remoteSummary(s.Remote.Info())
 	}
+	// A newer version, for the tray and the menu bar item on this computer.
+	if v := s.updateForHealth(r); v != "" {
+		resp["update"] = v
+	}
 	// The server's cloud ID lets an app confirm a direct or relay address
 	// reached the server it meant (it's in those addresses anyway).
 	if s.Cloud != nil {

@@ -19,10 +19,17 @@ type Settings struct {
 	// when the server can't convert everything at once: other devices step
 	// down first, and it gets a slot even when all are taken. "" for none.
 	PriorityDevice string `json:"priorityDevice"`
+	// UpdateCheck asks the downloads site twice a day whether a newer
+	// Kinara is out (it sends only this server's version and system).
+	UpdateCheck bool `json:"updateCheck"`
+	// GroupCollections shows movies of the same franchise (TMDB
+	// collections, like "The Lord of the Rings") as one card in movie
+	// libraries, which opens to the movies in order.
+	GroupCollections bool `json:"groupCollections"`
 }
 
 // DefaultSettings applies until the owner changes something.
-var DefaultSettings = Settings{ListAccounts: true, AllowSignup: false}
+var DefaultSettings = Settings{ListAccounts: true, AllowSignup: false, UpdateCheck: true, GroupCollections: true}
 
 func (s *Store) setting(ctx context.Context, key string) (string, bool, error) {
 	var v string
@@ -61,6 +68,12 @@ func (s *Store) GetSettings(ctx context.Context) (Settings, error) {
 	if out.AllowSignup, err = s.boolSetting(ctx, "allow_signup", DefaultSettings.AllowSignup); err != nil {
 		return out, err
 	}
+	if out.UpdateCheck, err = s.boolSetting(ctx, "update_check", DefaultSettings.UpdateCheck); err != nil {
+		return out, err
+	}
+	if out.GroupCollections, err = s.boolSetting(ctx, "group_collections", DefaultSettings.GroupCollections); err != nil {
+		return out, err
+	}
 	out.PriorityDevice, _, err = s.setting(ctx, "priority_device")
 	return out, err
 }
@@ -73,5 +86,23 @@ func (s *Store) PutSettings(ctx context.Context, st Settings) error {
 	if err := s.setSetting(ctx, "priority_device", st.PriorityDevice); err != nil {
 		return err
 	}
+	if err := s.setSetting(ctx, "update_check", strconv.FormatBool(st.UpdateCheck)); err != nil {
+		return err
+	}
+	if err := s.setSetting(ctx, "group_collections", strconv.FormatBool(st.GroupCollections)); err != nil {
+		return err
+	}
 	return s.setSetting(ctx, "allow_signup", strconv.FormatBool(st.AllowSignup))
+}
+
+// Value reads a value the server keeps for itself in the settings table
+// ("" when unset): things it remembers between runs, not owner settings.
+func (s *Store) Value(ctx context.Context, key string) (string, error) {
+	v, _, err := s.setting(ctx, key)
+	return v, err
+}
+
+// SetValue saves a value read back with Value.
+func (s *Store) SetValue(ctx context.Context, key, value string) error {
+	return s.setSetting(ctx, key, value)
 }

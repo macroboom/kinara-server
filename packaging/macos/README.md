@@ -29,6 +29,20 @@ It runs as the user, not as a system service: media in the user's folders,
 external drives and macOS's permission prompts all work better that way.
 Upgrading is installing a newer package; settings and data stay.
 
+## Updates
+
+The server checks `dl.kinara.media/server/latest.json` twice a day (the
+owner can turn this off under Manage, Updates, or with
+`KINARA_UPDATE_URL=off`). When a newer version is out, the Manage pages show
+it and the menu bar item gets "Update to Kinara X…". **Update** downloads
+`Kinara-<version>-macOS.pkg` into `~/Library/Caches/Kinara/updates`, checks
+its size and SHA-256 against latest.json, that it's signed by Macroboom LLC
+(`pkgutil --check-signature`) and that macOS accepts it as notarized
+(`spctl`), then runs `installer` behind macOS's own administrator password
+prompt. The postinstall restarts the server and the menu bar item; the
+package is deleted when the installer ends, and the new server empties the
+updates folder when it starts.
+
 ## One-time setup (on the Mac that builds)
 
 1. **Tools:** Xcode (`sudo xcode-select -s /Applications/Xcode.app`), Go,

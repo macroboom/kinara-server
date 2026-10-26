@@ -30,6 +30,7 @@ import (
 	"kinara/internal/tmdb"
 	"kinara/internal/transcode"
 	"kinara/internal/trickplay"
+	"kinara/internal/update"
 	"kinara/internal/watch"
 )
 
@@ -104,6 +105,8 @@ type Server struct {
 	Remote *remote.Sidecar
 	// Cloud links the server to a Kinara account for remote play (nil: off).
 	Cloud *cloud.Manager
+	// Updater checks for and installs new releases (nil: off; see updates.go).
+	Updater *update.Updater
 
 	limiter *auth.Limiter
 	// tunnelLimiter counts failed sign-ins from all remote devices
@@ -256,6 +259,7 @@ func (s *Server) Handler() http.Handler {
 	// Integrations (webhooks, incoming hooks, API keys) and requests.
 	s.integrationRoutes(mux)
 	s.requestRoutes(mux)
+	s.updateRoutes(mux)
 
 	// The web player and manager.
 	mux.Handle("GET /app/", s.webApp())

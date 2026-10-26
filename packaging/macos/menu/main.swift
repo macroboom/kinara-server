@@ -3,7 +3,8 @@
 // The server itself runs without it (a LaunchAgent, see kinara-launch);
 // this is the part people see. A Kinara icon in the menu bar shows whether
 // the server is running and offers Open Kinara, Restart, Stop or Start,
-// the log and the settings file. Opening Kinara.app from Applications or
+// the log and the settings file. When a newer Kinara is out, "Update to
+// Kinara X…" opens the Manage page, which installs it. Opening Kinara.app from Applications or
 // Launchpad opens the web app; at login (media.kinara.menu.plist, with
 // --login) it only puts the icon in the menu bar. No Dock icon (LSUIElement).
 //
@@ -53,6 +54,7 @@ final class Menu: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var item: NSStatusItem!
   private let status = NSMenuItem(title: "Checking…", action: nil, keyEquivalent: "")
   private let startStop = NSMenuItem(title: "Stop Kinara", action: #selector(toggleServer), keyEquivalent: "")
+  private let updateItem = NSMenuItem(title: "Update Kinara…", action: #selector(openUpdate), keyEquivalent: "")
   private var timer: Timer?
   private var running = false
   private var version = ""
@@ -76,6 +78,9 @@ final class Menu: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.addItem(status)
     menu.addItem(.separator())
     menu.addItem(withTitle: "Open Kinara", action: #selector(openWeb), keyEquivalent: "o").target = self
+    updateItem.target = self
+    updateItem.isHidden = true
+    menu.addItem(updateItem)
     menu.addItem(.separator())
     menu.addItem(withTitle: "Restart Kinara", action: #selector(restart), keyEquivalent: "r").target = self
     startStop.target = self
@@ -116,14 +121,16 @@ final class Menu: NSObject, NSApplicationDelegate, NSMenuDelegate {
     URLSession.shared.dataTask(with: req) { [weak self] data, response, _ in
       let ok = (response as? HTTPURLResponse)?.statusCode == 200
       var version = ""
+      var newer = ""
       if ok, let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
         version = json["version"] as? String ?? ""
+        newer = json["update"] as? String ?? ""
       }
-      DispatchQueue.main.async { self?.show(up: ok, version: version) }
+      DispatchQueue.main.async { self?.show(up: ok, version: version, newer: newer) }
     }.resume()
   }
 
-  private func show(up: Bool, version: String) {
+  private func show(up: Bool, version: String, newer: String) {
     running = up
     self.version = version
     let loaded = isLoaded()
@@ -135,6 +142,8 @@ final class Menu: NSObject, NSApplicationDelegate, NSMenuDelegate {
       status.title = "Kinara is stopped"
     }
     startStop.title = loaded ? "Stop Kinara" : "Start Kinara"
+    updateItem.isHidden = !(up && !newer.isEmpty)
+    updateItem.title = "Update to Kinara \(newer)…"
     item.button?.appearsDisabled = !up
     if up && openWhenUp {
       openWhenUp = false
@@ -146,6 +155,11 @@ final class Menu: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   @objc func openWeb() {
     NSWorkspace.shared.open(URL(string: "http://localhost:\(serverPort())")!)
+  }
+
+  /// The Manage page's Updates section downloads and installs it.
+  @objc func openUpdate() {
+    NSWorkspace.shared.open(URL(string: "http://localhost:\(serverPort())/app/#/manage/updates")!)
   }
 
   @objc func restart() {

@@ -47,6 +47,11 @@
 //	                       https://cloud.kinara.media; off turns it off)
 //	KINARA_IROH            path to kinara-iroh (default: next to the server, or on PATH)
 //	KINARA_TUNNEL_LISTEN   loopback address kinara-iroh delivers connections to (default 127.0.0.1:8421)
+//
+// Updates (checking can also be turned off in the web manager, under Server):
+//
+//	KINARA_UPDATE_URL      the list of releases (default https://dl.kinara.media/server/latest.json;
+//	                       off turns update checks off)
 package main
 
 import (
@@ -86,6 +91,7 @@ import (
 	"kinara/internal/tmdb"
 	"kinara/internal/transcode"
 	"kinara/internal/trickplay"
+	"kinara/internal/update"
 	"kinara/internal/watch"
 	"kinara/internal/watcher"
 )
@@ -363,6 +369,11 @@ func serveUntil(parent context.Context, args []string) error {
 		BaseCtx: ctx, Warnings: warnings, TMDB: d.tmdb, FFprobe: c.ffprobe, WebDir: webDir,
 		LANPort: lanPortOf(c.listen),
 		Logs:    d.logs, DataDir: c.dataDir, CacheDir: c.cache(""),
+	}
+	// New releases: checked twice a day, installed from the manager page.
+	if u := env("KINARA_UPDATE_URL", update.DefaultURL); u != "off" {
+		srv.Updater = &update.Updater{URL: u, Current: version, Dir: c.cache("updates"), Log: d.log}
+		go srv.RunUpdates(ctx)
 	}
 	// Readings for the metrics page: every 5 s, the last day in memory.
 	srv.Metrics = &metrics.Collector{Streams: srv.StreamCounts}

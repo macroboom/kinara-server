@@ -103,6 +103,10 @@ Name: "{autodesktop}\Kinara"; Filename: "{app}\kinara-tray.exe"; Parameters: "--
 
 [Run]
 Filename: "{app}\kinara-tray.exe"; Flags: nowait runasoriginaluser skipifsilent; Check: WantTrayAtSignIn
+; An update started from Kinara's own Manage page runs silently
+; (/AUTOUPDATE=1): start the tray again, which in sign-in mode is what runs
+; the server. The service starts the server itself (CurStepChanged).
+Filename: "{app}\kinara-tray.exe"; Flags: nowait runasoriginaluser; Check: TrayAfterAutoUpdate
 ; --open waits until the server answers, then opens the browser.
 Filename: "{app}\kinara-tray.exe"; Parameters: "--open"; Description: "Open Kinara in your browser"; Flags: postinstall nowait skipifsilent runasoriginaluser
 
@@ -159,6 +163,18 @@ end;
 function WantTrayAtSignIn: Boolean;
 begin
   Result := (not IsServiceMode) or WizardIsTaskSelected('tray');
+end;
+
+// An update Kinara started itself (see internal/update): silent, with
+// /AUTOUPDATE=1 on the command line.
+function IsAutoUpdate: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:AUTOUPDATE|0}') = '1');
+end;
+
+function TrayAfterAutoUpdate: Boolean;
+begin
+  Result := IsAutoUpdate and WantTrayAtSignIn;
 end;
 
 function EnvFile: String;
