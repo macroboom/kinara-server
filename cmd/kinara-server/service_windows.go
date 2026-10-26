@@ -129,6 +129,14 @@ func serviceMain(argc uint32, argv **uint16) uintptr {
 
 	err := <-done
 	cancel()
+	if errors.Is(err, errRestart) {
+		// Asked to restart (restoring a backup): stopping with a failure
+		// code makes the service's recovery settings (restart after 5 s,
+		// set by the installer) start it again.
+		fmt.Fprintln(os.Stderr, "restarting: the service starts again in a few seconds")
+		setServiceState(stateStopped, 0, 1, 0)
+		return 0
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		// A non-zero code lets the restart-on-failure setting kick in.

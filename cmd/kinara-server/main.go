@@ -77,6 +77,7 @@ import (
 
 	"kinara/internal/api"
 	"kinara/internal/auth"
+	"kinara/internal/backup"
 	"kinara/internal/cloud"
 	"kinara/internal/ffmpeg"
 	"kinara/internal/images"
@@ -316,8 +317,18 @@ func serve(args []string) error {
 			cancel()
 		}()
 	}
-	return serveUntil(ctx, args)
+	err := serveUntil(ctx, args)
+	if errors.Is(err, errRestart) {
+		// Start again in place (see restart_*.go).
+		return restartSelf()
+	}
+	return err
 }
+
+// errRestart is what serveUntil returns when the server asked to be
+// restarted (to restore a backup). The Windows service reports it as a
+// failure, so the service manager starts it again.
+var errRestart = errors.New("restarting")
 
 // serveUntil runs the server until parent ends (the Windows service manager
 // stopping it) or the process is interrupted.
@@ -328,6 +339,10 @@ func serveUntil(parent context.Context, args []string) error {
 	fs.StringVar(&c.listen, "listen", env("KINARA_LISTEN", ":8420"), "address to listen on")
 	fs.DurationVar(&c.rescan, "rescan", 6*time.Hour, "rescan libraries this often (0 to turn off)")
 	fs.Parse(args)
+
+	// A backup staged for restoring goes in place before the database opens.
+	envFile := os.Getenv("KINARA_ENV_FILE")
+	restored, restoreErr := backup.ApplyPending(c.dataDir, envFile, slog.Default())
 
 	d, err := open(c)
 	if err != nil {
@@ -348,6 +363,11 @@ func serveUntil(parent context.Context, args []string) error {
 	ffmpegOK := d.ffmpeg.Available() == nil
 	if !ffmpegOK {
 		warnings = append(warnings, "ffmpeg was not found, so files the TV can't play won't be converted, and there are no preview thumbnails or Skip intro. Install ffmpeg or pass -ffmpeg /path/to/ffmpeg.")
+	}
+	if restoreErr != nil {
+		warnings = append(warnings, "Restoring a backup failed, so the library is as it was: "+restoreErr.Error())
+	} else if restored != nil {
+		d.log.Info("this server was restored from a backup", "made", time.Unix(restored.CreatedAt, 0).Format(time.RFC3339), "on", restored.Host)
 	}
 	for _, w := range warnings {
 		d.log.Warn(w)
@@ -370,9 +390,20 @@ func serveUntil(parent context.Context, args []string) error {
 		LANPort: lanPortOf(c.listen),
 		Logs:    d.logs, DataDir: c.dataDir, CacheDir: c.cache(""),
 	}
-	// New releases: checked twice a day, installed from the manager page.
+	// Backups: nightly, and from the manager page, which also restores them.
+	srv.Backups = &backup.Manager{Store: d.store, DataDir: c.dataDir, EnvFile: envFile, Version: version, Log: d.log}
+	restart := make(chan string, 1)
+	srv.Restart = func(reason string) {
+		select {
+		case restart <- reason:
+		default:
+		}
+	}
+	go srv.RunBackups(ctx)
+	// New releases: checked twice a day, installed from the manager page
+	// (after a backup).
 	if u := env("KINARA_UPDATE_URL", update.DefaultURL); u != "off" {
-		srv.Updater = &update.Updater{URL: u, Current: version, Dir: c.cache("updates"), Log: d.log}
+		srv.Updater = &update.Updater{URL: u, Current: version, Dir: c.cache("updates"), Log: d.log, Before: srv.BackupBeforeUpdate}
 		go srv.RunUpdates(ctx)
 	}
 	// Readings for the metrics page: every 5 s, the last day in memory.
@@ -467,6 +498,14 @@ func serveUntil(parent context.Context, args []string) error {
 		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return httpSrv.Shutdown(shutCtx)
+	case reason := <-restart:
+		d.log.Info("restarting", "why", reason)
+		// Background work (the remote access sidecar, scans) ends with ctx.
+		stop()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutCtx)
+		return errRestart
 	}
 	return nil
 }

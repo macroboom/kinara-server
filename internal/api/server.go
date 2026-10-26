@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"kinara/internal/auth"
+	"kinara/internal/backup"
 	"kinara/internal/cloud"
 	"kinara/internal/images"
 	"kinara/internal/jobs"
@@ -107,6 +108,13 @@ type Server struct {
 	Cloud *cloud.Manager
 	// Updater checks for and installs new releases (nil: off; see updates.go).
 	Updater *update.Updater
+	// Backups makes and lists backups (nil: off; see backups.go).
+	Backups *backup.Manager
+	// Restart stops the server and starts it again (nil when it can't),
+	// for restoring a backup.
+	Restart func(reason string)
+	// restarting is set once a restore is staged.
+	restarting atomic.Bool
 
 	limiter *auth.Limiter
 	// tunnelLimiter counts failed sign-ins from all remote devices
@@ -260,6 +268,7 @@ func (s *Server) Handler() http.Handler {
 	s.integrationRoutes(mux)
 	s.requestRoutes(mux)
 	s.updateRoutes(mux)
+	s.backupRoutes(mux)
 
 	// The web player and manager.
 	mux.Handle("GET /app/", s.webApp())

@@ -713,6 +713,12 @@ func startChild() {
 		app.child.Lock()
 		app.child.cmd, app.child.stdin = nil, nil
 		app.child.Unlock()
+		// 75: the server asked to be restarted (restoring a backup).
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 75 && app.wanted.Load() {
+			time.Sleep(500 * time.Millisecond)
+			startChild()
+			return
+		}
 		if app.wanted.Load() {
 			// It ended without being asked: say so, then try again shortly.
 			notify("Kinara stopped", fmt.Sprintf("The server stopped (%v). Starting it again; Open logs shows why.", err), true)

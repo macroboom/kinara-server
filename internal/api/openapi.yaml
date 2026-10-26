@@ -22,6 +22,30 @@ components:
       type: object
       properties:
         error: { type: string }
+    BackupSettings:
+      type: object
+      properties:
+        auto: { type: boolean, description: A backup every night at about 3:30 (default on) }
+        keep: { type: integer, description: How many nightly and manual backups to keep (default 7) }
+        dir: { type: string, description: 'The backups folder, a full path on the server ("" for backups in the data folder)' }
+    Backup:
+      type: object
+      properties:
+        name: { type: string }
+        size: { type: integer }
+        version: { type: string, description: The Kinara version that made it }
+        schema: { type: integer }
+        createdAt: { type: integer }
+        host: { type: string, description: The computer it was made on }
+        reason: { type: string, enum: [scheduled, manual, before-restore, before-update] }
+        counts:
+          type: object
+          properties:
+            users: { type: integer }
+            libraries: { type: integer }
+            titles: { type: integer }
+            watched: { type: integer }
+        files: { type: array, items: { type: string } }
     UpdateStatus:
       type: object
       properties:
@@ -1547,6 +1571,92 @@ paths:
       description: Fields left out keep their values.
       responses:
         "200": { description: Saved }
+
+  /backups:
+    get:
+      summary: Backups, their settings and the next nightly one (owners only)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings: { $ref: "#/components/schemas/BackupSettings" }
+                  dir: { type: string, description: The backups folder in use }
+                  backups: { type: array, items: { $ref: "#/components/schemas/Backup" } }
+                  nextAt: { type: integer, description: Unix seconds of the next nightly backup (0 when off) }
+                  error: { type: string }
+    post:
+      summary: Make a backup now (owners only)
+      responses:
+        "201":
+          description: Made
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Backup" }
+
+  /backups/settings:
+    put:
+      summary: Change the backup settings (owners only)
+      description: Fields left out keep their values. A folder is checked for writing first.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackupSettings" }
+      responses:
+        "200": { description: Saved }
+        "400": { description: Not a full path, not writable, or keep outside 1 to 365 }
+
+  /backups/{name}:
+    get:
+      summary: Download a backup (owners only; also takes ?token=)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The zip file, content: { application/zip: {} } }
+    delete:
+      summary: Delete a backup (owners only)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+
+  /backups/{name}/restore:
+    post:
+      summary: Restore a backup from the list (owners only)
+      description: |
+        Checks the backup, makes a backup of the library as it is now
+        (reason before-restore, so this can be undone), then restarts the
+        server, which puts the backup in place before opening the database.
+        The current files are kept in the data folder's restore-old folder.
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                settings: { type: boolean, description: Also restore the settings file (kinara.env). Off by default. }
+      responses:
+        "202": { description: Restarting to restore }
+        "400": { description: Not a Kinara backup, or made by a newer Kinara }
+        "409": { description: A restore is already under way }
+
+  /backups/restore:
+    post:
+      summary: Restore an uploaded backup (owners only)
+      description: The request body is the backup's zip file. ?settings=1 also restores kinara.env. Otherwise as /backups/{name}/restore.
+      parameters:
+        - { name: settings, in: query, schema: { type: string, enum: ["1"] } }
+      requestBody:
+        content:
+          application/zip: {}
+      responses:
+        "202": { description: Restarting to restore }
+        "400": { description: Not a Kinara backup, or made by a newer Kinara }
 
   /update:
     get:

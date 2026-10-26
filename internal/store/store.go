@@ -159,3 +159,65 @@ func placeholders(n int) string {
 	}
 	return strings.TrimSuffix(strings.Repeat("?, ", n), ", ")
 }
+
+// Snapshot writes a consistent copy of the whole database to path (which
+// must not exist yet), while the server keeps running: SQLite's VACUUM
+// INTO, which also leaves out free pages.
+func (s *Store) Snapshot(ctx context.Context, path string) error {
+	_, err := s.db.ExecContext(ctx, `VACUUM INTO '`+strings.ReplaceAll(path, "'", "''")+`'`)
+	return err
+}
+
+// SchemaVersion is the newest migration this build knows, which a
+// database made by it may have applied.
+func SchemaVersion() int {
+	names, _ := fs.Glob(migrationsFS, "migrations/*.sql")
+	top := 0
+	for _, name := range names {
+		v, err := strconv.Atoi(strings.SplitN(strings.TrimPrefix(name, "migrations/"), "_", 2)[0])
+		if err == nil && v > top {
+			top = v
+		}
+	}
+	return top
+}
+
+// Counts are what a backup shows about the library it holds.
+type Counts struct {
+	Users     int `json:"users"`
+	Libraries int `json:"libraries"`
+	Titles    int `json:"titles"`
+	Watched   int `json:"watched"`
+}
+
+// CountAll counts accounts, libraries, titles (movies and shows) and
+// titles marked watched in the database.
+func (s *Store) CountAll(ctx context.Context) (Counts, error) {
+	return countAll(ctx, s.db)
+}
+
+// CountFile is CountAll for a database file, opened read-only, and its
+// schema version (the newest migration applied).
+func CountFile(ctx context.Context, path string) (Counts, int, error) {
+	db, err := sql.Open(driverName, "file:"+path+"?mode=ro&_pragma=query_only(1)")
+	if err != nil {
+		return Counts{}, 0, err
+	}
+	defer db.Close()
+	var v int
+	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v); err != nil {
+		return Counts{}, 0, fmt.Errorf("not a Kinara database: %w", err)
+	}
+	c, err := countAll(ctx, db)
+	return c, v, err
+}
+
+func countAll(ctx context.Context, db *sql.DB) (Counts, error) {
+	var c Counts
+	err := db.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM users),
+		(SELECT COUNT(*) FROM libraries),
+		(SELECT COUNT(*) FROM items WHERE kind IN ('movie', 'show')),
+		(SELECT COUNT(*) FROM watch_state WHERE completed = 1)`).Scan(&c.Users, &c.Libraries, &c.Titles, &c.Watched)
+	return c, err
+}

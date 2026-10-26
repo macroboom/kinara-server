@@ -115,6 +115,9 @@ type Updater struct {
 	Kind   string
 	Client *http.Client
 	Log    *slog.Logger
+	// Before runs right before the installer starts (a backup, say). If
+	// it fails the update still goes ahead; the failure is logged.
+	Before func(ctx context.Context) error
 
 	mu        sync.Mutex
 	release   *Release
@@ -283,6 +286,11 @@ func (u *Updater) Install(ctx context.Context) error {
 		}
 		if err == nil {
 			u.set(StateInstalling, "")
+			if u.Before != nil {
+				if berr := u.Before(ctx); berr != nil {
+					u.log().Warn("update: before installing", "err", berr)
+				}
+			}
 			u.log().Info("update: starting the installer", "version", r.Version, "file", path)
 			err = launch(k, path, r.Version, u.Dir, func(err error) {
 				// The installer ended and we're still running: it failed or

@@ -106,3 +106,45 @@ func (s *Store) Value(ctx context.Context, key string) (string, error) {
 func (s *Store) SetValue(ctx context.Context, key, value string) error {
 	return s.setSetting(ctx, key, value)
 }
+
+// BackupSettings are the owner's choices for automatic backups.
+type BackupSettings struct {
+	// Auto makes a backup every night.
+	Auto bool `json:"auto"`
+	// Keep is how many scheduled and manual backups to keep (oldest go first).
+	Keep int `json:"keep"`
+	// Dir is the backups folder; "" for "backups" in the data folder. A
+	// folder on another drive, a NAS or a synced folder (Dropbox, OneDrive,
+	// iCloud Drive) keeps backups safe if this computer's drive fails.
+	Dir string `json:"dir"`
+}
+
+// DefaultBackupSettings apply until the owner changes something.
+var DefaultBackupSettings = BackupSettings{Auto: true, Keep: 7}
+
+// GetBackupSettings reads the backup settings.
+func (s *Store) GetBackupSettings(ctx context.Context) (BackupSettings, error) {
+	out := DefaultBackupSettings
+	var err error
+	if out.Auto, err = s.boolSetting(ctx, "backup_auto", out.Auto); err != nil {
+		return out, err
+	}
+	if v, ok, err := s.setting(ctx, "backup_keep"); err != nil {
+		return out, err
+	} else if n, perr := strconv.Atoi(v); ok && perr == nil && n > 0 {
+		out.Keep = n
+	}
+	out.Dir, _, err = s.setting(ctx, "backup_dir")
+	return out, err
+}
+
+// PutBackupSettings saves the backup settings.
+func (s *Store) PutBackupSettings(ctx context.Context, b BackupSettings) error {
+	if err := s.setSetting(ctx, "backup_auto", strconv.FormatBool(b.Auto)); err != nil {
+		return err
+	}
+	if err := s.setSetting(ctx, "backup_keep", strconv.Itoa(b.Keep)); err != nil {
+		return err
+	}
+	return s.setSetting(ctx, "backup_dir", b.Dir)
+}
