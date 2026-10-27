@@ -798,6 +798,8 @@ func (s *Server) reportProgress(w http.ResponseWriter, r *http.Request, u store.
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// Watching an optimized copy counts on its original.
+	req.VersionID = s.sourceVersionID(r.Context(), req.VersionID)
 	it, err := s.Store.GetItem(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "item not found")
@@ -873,13 +875,14 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, u store.User) {
 	s.Log.Info("stream request", "version", r.PathValue("id"), "range", r.Header.Get("Range"),
 		"client", clientIP(r))
 
-	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	// An optimized copy's ID ("o42") plays the copy (optimize.go).
+	v, _, err := s.playableVersion(r.Context(), r.PathValue("id"))
 	if err != nil || v.Missing {
 		writeErr(w, http.StatusNotFound, "file not found")
 		return
 	}
 	step("found in database")
-	if rg := r.Header.Get("Range"); s.Jobs != nil && (rg == "" || strings.HasPrefix(rg, "bytes=0-")) {
+	if rg := r.Header.Get("Range"); s.Jobs != nil && !strings.HasPrefix(v.ID, optimizedPrefix) && (rg == "" || strings.HasPrefix(rg, "bytes=0-")) {
 		// Someone started watching: make its preview thumbnails next.
 		s.Jobs.Prioritize(v.ID)
 	}

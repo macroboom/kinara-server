@@ -1958,6 +1958,58 @@ paths:
       responses:
         "204": { description: Noted }
 
+  /optimize:
+    get:
+      summary: Optimized versions, by rule, with the room they take (owners only)
+      description: |
+        A rule asks for a smaller copy (an MP4 with H.264 and stereo AAC) of
+        every movie and episode in a library, or of one title, made ahead
+        of time in the background. Ready copies are listed as extra versions
+        of their title (ID "o" plus a number, "optimized" set to the
+        quality), so apps short on bandwidth play them as they are. Titles
+        already that small are skipped ("small").
+      responses:
+        "200": { description: OK }
+    post:
+      summary: Optimize a library or a title (owners only)
+      description: Asking again for the same library or title changes its quality.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                libraryId: { type: integer }
+                itemId: { type: string, description: A movie, episode, season or show }
+                quality: { type: string, enum: [high, medium, low], description: Default medium }
+      responses:
+        "201": { description: Added }
+        "400": { description: No ffmpeg, a bad quality, or neither or both of libraryId and itemId }
+
+  /optimize/{id}:
+    delete:
+      summary: Remove a rule (its copies go unless a download still uses them; owners only)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Removed }
+
+  /optimize/{id}/retry:
+    post:
+      summary: Put a rule's failed copies back in line (owners only)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: How many were put back }
+
+  /items/{id}/optimize:
+    get:
+      summary: The optimize rule for a title (or its library) and its copies (owners only)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK }
+
   /backups:
     get:
       summary: Backups, their settings and the next nightly one (owners only)

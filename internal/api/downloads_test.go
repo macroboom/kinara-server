@@ -131,7 +131,7 @@ func TestDownloads(t *testing.T) {
 
 	var detail downloadDetail
 	sam.do("GET", "/downloads/"+id, nil, &detail)
-	if detail.Audio == nil || detail.Audio.Index != 1 || len(detail.Subtitles) != 1 || detail.Subtitles[0].URL != "/api/v1/subtitles/"+v.ID+"/2" {
+	if detail.Audio == nil || detail.Audio.Index != 1 || len(detail.Subtitles) != 1 || detail.Subtitles[0].URL != "/api/v1/subtitles/"+v.ID+"/2.vtt" {
 		t.Fatalf("detail %+v", detail)
 	}
 

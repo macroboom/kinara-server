@@ -23,6 +23,8 @@ type DownloadFile struct {
 	CreatedAt   int64   `json:"createdAt"`
 	ReadyAt     int64   `json:"readyAt,omitempty"`
 	UsedAt      int64   `json:"usedAt,omitempty"`
+	// Optimized: kept for streaming by the owner's rule (see optimize_rules).
+	Optimized bool `json:"optimized,omitempty"`
 }
 
 // Download file states.
@@ -52,12 +54,12 @@ type Download struct {
 }
 
 const downloadFileCols = `f.id, f.version_id, f.quality, f.audio, f.state, f.progress, f.path, f.size, f.estimate,
-	f.error, f.source_mtime, f.created_at, f.ready_at, f.used_at`
+	f.error, f.source_mtime, f.created_at, f.ready_at, f.used_at, f.optimized`
 
 func scanDownloadFile(sc interface{ Scan(...any) error }, extra ...any) (DownloadFile, error) {
 	var f DownloadFile
 	dest := append([]any{&f.ID, &f.VersionID, &f.Quality, &f.Audio, &f.State, &f.Progress, &f.Path, &f.Size,
-		&f.Estimate, &f.Error, &f.SourceMtime, &f.CreatedAt, &f.ReadyAt, &f.UsedAt}, extra...)
+		&f.Estimate, &f.Error, &f.SourceMtime, &f.CreatedAt, &f.ReadyAt, &f.UsedAt, &f.Optimized}, extra...)
 	err := sc.Scan(dest...)
 	return f, err
 }
@@ -111,22 +113,24 @@ func (s *Store) TouchDownloadFile(ctx context.Context, id int64) error {
 	return err
 }
 
-// NextDownloadFile is the oldest queued copy someone still wants.
+// queueOrder lines queued copies up: ones a device is waiting for first
+// (oldest request first), then optimized versions.
+const queueOrder = `WHERE f.state = ? AND (f.optimized = 1 OR EXISTS (SELECT 1 FROM downloads d WHERE d.file_id = f.id))
+	ORDER BY NOT EXISTS (SELECT 1 FROM downloads d WHERE d.file_id = f.id),
+		COALESCE((SELECT MIN(d.created_at) FROM downloads d WHERE d.file_id = f.id), f.created_at), f.id`
+
+// NextDownloadFile is the next queued copy to prepare.
 func (s *Store) NextDownloadFile(ctx context.Context) (DownloadFile, error) {
-	f, err := scanDownloadFile(s.db.QueryRowContext(ctx, `SELECT `+downloadFileCols+` FROM download_files f
-		WHERE f.state = ? AND EXISTS (SELECT 1 FROM downloads d WHERE d.file_id = f.id)
-		ORDER BY (SELECT MIN(d.created_at) FROM downloads d WHERE d.file_id = f.id), f.id LIMIT 1`, DownloadQueued))
+	f, err := scanDownloadFile(s.db.QueryRowContext(ctx, `SELECT `+downloadFileCols+` FROM download_files f `+queueOrder+` LIMIT 1`, DownloadQueued))
 	if errors.Is(err, sql.ErrNoRows) {
 		return f, ErrNotFound
 	}
 	return f, err
 }
 
-// QueuedBefore counts the queued copies ahead of one (its place in line).
+// QueuedBefore says how many queued copies are ahead of each one.
 func (s *Store) QueuedBefore(ctx context.Context) (map[int64]int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT f.id FROM download_files f
-		WHERE f.state = ? AND EXISTS (SELECT 1 FROM downloads d WHERE d.file_id = f.id)
-		ORDER BY (SELECT MIN(d.created_at) FROM downloads d WHERE d.file_id = f.id), f.id`, DownloadQueued)
+	rows, err := s.db.QueryContext(ctx, `SELECT f.id FROM download_files f `+queueOrder, DownloadQueued)
 	if err != nil {
 		return nil, err
 	}
@@ -330,4 +334,103 @@ func (s *Store) intSetting(ctx context.Context, key string, def int) (int, error
 		return def, nil
 	}
 	return n, nil
+}
+
+// OptimizeRule asks for optimized versions of a library or a title.
+type OptimizeRule struct {
+	ID        int64  `json:"id"`
+	LibraryID int64  `json:"libraryId,omitempty"`
+	ItemID    string `json:"itemId,omitempty"`
+	Quality   string `json:"quality"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+// OptimizeRules lists the rules, oldest first.
+func (s *Store) OptimizeRules(ctx context.Context) ([]OptimizeRule, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, COALESCE(library_id, 0), COALESCE(item_id, ''), quality, created_at FROM optimize_rules ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []OptimizeRule{}
+	for rows.Next() {
+		var r OptimizeRule
+		if err := rows.Scan(&r.ID, &r.LibraryID, &r.ItemID, &r.Quality, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// PutOptimizeRule adds a rule, or changes the quality of the one for the
+// same library or title.
+func (s *Store) PutOptimizeRule(ctx context.Context, r *OptimizeRule) error {
+	if r.CreatedAt == 0 {
+		r.CreatedAt = now()
+	}
+	var lib, item any
+	conflict := "item_id"
+	if r.LibraryID > 0 {
+		lib, conflict = r.LibraryID, "library_id"
+	} else {
+		item = r.ItemID
+	}
+	return s.db.QueryRowContext(ctx, `INSERT INTO optimize_rules (library_id, item_id, quality, created_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (`+conflict+`) WHERE `+conflict+` IS NOT NULL DO UPDATE SET quality = excluded.quality
+		RETURNING id, created_at`, lib, item, r.Quality, r.CreatedAt).Scan(&r.ID, &r.CreatedAt)
+}
+
+// DeleteOptimizeRule removes a rule (its copies go at the next tidy-up
+// unless another rule or a download wants them).
+func (s *Store) DeleteOptimizeRule(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM optimize_rules WHERE id = ?`, id)
+	return err
+}
+
+// SetOptimized marks exactly these copies as optimized versions.
+func (s *Store) SetOptimized(ctx context.Context, ids []int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS want_optimized (id INTEGER PRIMARY KEY)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM want_optimized`); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO want_optimized (id) VALUES (?)`, id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE download_files SET optimized = (id IN (SELECT id FROM want_optimized))
+		WHERE optimized <> (id IN (SELECT id FROM want_optimized))`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM want_optimized`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// OptimizedCopies lists a version's optimized versions that are ready.
+func (s *Store) OptimizedCopies(ctx context.Context, versionID string) ([]DownloadFile, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+downloadFileCols+` FROM download_files f
+		WHERE f.version_id = ? AND f.optimized = 1 AND f.state = ? AND f.path <> '' ORDER BY f.id`, versionID, DownloadReady)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DownloadFile
+	for rows.Next() {
+		f, err := scanDownloadFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }

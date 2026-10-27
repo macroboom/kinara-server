@@ -39,6 +39,9 @@ type VersionView struct {
 	// downloaded (see subtitles.go). Not in Streams, whose order matches
 	// what players list.
 	Subtitles []ExternalSubtitle `json:"subtitles"`
+	// Optimized is the quality of an optimized copy ("medium"): a smaller
+	// copy the server made ahead of time (see optimize.go). "" for files.
+	Optimized string `json:"optimized,omitempty"`
 }
 
 func imageURL(id, kind string) string { return "/api/v1/images/" + id + "/" + kind }
@@ -98,6 +101,7 @@ func (s *Server) versionViews(ctx context.Context, itemID string, u store.User) 
 		return nil, err
 	}
 	out := make([]VersionView, 0, len(versions))
+	var copies []VersionView
 	for _, v := range versions {
 		streams, err := s.Store.Streams(ctx, v.ID)
 		if err != nil {
@@ -120,8 +124,11 @@ func (s *Server) versionViews(ctx context.Context, itemID string, u store.User) 
 			vv.EndCredits = c
 		}
 		out = append(out, vv)
+		// Optimized copies come after it: apps pick them when their
+		// connection can't carry the original.
+		copies = append(copies, s.optimizedViews(ctx, v, streams, vv)...)
 	}
-	return out, nil
+	return append(out, copies...), nil
 }
 
 // recentlyAdded merges newest movies and shows across libraries.

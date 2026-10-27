@@ -451,7 +451,11 @@ func serveUntil(parent context.Context, args []string) error {
 		// Always on: it also makes pictures for "Other videos" titles.
 		{
 			srv.Jobs = worker
-			d.scanner.OnDone = func(int64) { worker.Kick() }
+			d.scanner.OnDone = func(int64) {
+				worker.Kick()
+				// New files in an optimized library get their copies.
+				go srv.OptimizeNewFiles()
+			}
 			go worker.Run(ctx)
 		}
 	}

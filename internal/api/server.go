@@ -121,6 +121,8 @@ type Server struct {
 	// off; the original quality still works). See downloads.go.
 	DownloadDir string
 	dl          downloadsState
+	// opt remembers the optimized versions each rule made (optimize.go).
+	opt optimizeState
 
 	limiter *auth.Limiter
 	// tunnelLimiter counts failed sign-ins from all remote devices
@@ -278,6 +280,7 @@ func (s *Server) Handler() http.Handler {
 	s.subtitleRoutes(mux)
 	s.editRoutes(mux)
 	s.downloadRoutes(mux)
+	s.optimizeRoutes(mux)
 
 	// The web player and manager.
 	mux.Handle("GET /app/", s.webApp())

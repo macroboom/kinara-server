@@ -293,7 +293,7 @@ func (s *Server) searchSubtitles(w http.ResponseWriter, r *http.Request, u store
 		writeErr(w, http.StatusNotImplemented, subs.ErrNoKey.Error())
 		return
 	}
-	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	v, err := s.sourceVersion(r.Context(), r.PathValue("id"))
 	if err != nil || v.Missing || v.ItemID == "" {
 		writeErr(w, http.StatusNotFound, "file not found")
 		return
@@ -365,7 +365,7 @@ func (s *Server) downloadSubtitle(w http.ResponseWriter, r *http.Request, u stor
 		writeErr(w, http.StatusNotImplemented, subs.ErrNoKey.Error())
 		return
 	}
-	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	v, err := s.sourceVersion(r.Context(), r.PathValue("id"))
 	if err != nil || v.Missing {
 		writeErr(w, http.StatusNotFound, "file not found")
 		return

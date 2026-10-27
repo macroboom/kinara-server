@@ -85,7 +85,7 @@ func (s *Server) transcodeStream(w http.ResponseWriter, r *http.Request, u store
 // "request" and counts its clock from "start", so the position it shows
 // matches the picture.
 func (s *Server) transcodeStart(w http.ResponseWriter, r *http.Request, u store.User) {
-	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	v, _, err := s.playableVersion(r.Context(), r.PathValue("id"))
 	if err != nil || v.Missing {
 		writeErr(w, http.StatusNotFound, "file not found")
 		return
@@ -155,7 +155,8 @@ func (s *Server) trickplayManifest(w http.ResponseWriter, r *http.Request, u sto
 		writeErr(w, http.StatusNotFound, "previews are turned off")
 		return
 	}
-	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	// An optimized copy shares its original's previews.
+	v, err := s.sourceVersion(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "file not found")
 		return
@@ -181,7 +182,8 @@ func (s *Server) trickplaySheet(w http.ResponseWriter, r *http.Request, u store.
 		writeErr(w, http.StatusNotFound, "previews are turned off")
 		return
 	}
-	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	// An optimized copy shares its original's previews.
+	v, err := s.sourceVersion(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "file not found")
 		return
@@ -478,16 +480,13 @@ func (s *Server) tmdbImage(w http.ResponseWriter, r *http.Request, u store.User)
 // (path {id}, a version), the video and audio choices, and where to start.
 // On failure it returns the HTTP status to answer with.
 func (s *Server) transcodeRequest(r *http.Request) (transcode.Request, store.Version, int, error) {
-	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	// An optimized copy's ID converts from the copy (optimize.go).
+	v, streams, err := s.playableVersion(r.Context(), r.PathValue("id"))
 	if err != nil || v.Missing {
 		return transcode.Request{}, v, http.StatusNotFound, errors.New("file not found")
 	}
 	if _, err := os.Stat(v.Path); err != nil {
 		return transcode.Request{}, v, http.StatusNotFound, errors.New("file not available")
-	}
-	streams, err := s.Store.Streams(r.Context(), v.ID)
-	if err != nil {
-		return transcode.Request{}, v, http.StatusInternalServerError, err
 	}
 	q := r.URL.Query()
 	req := transcode.Request{
@@ -633,7 +632,8 @@ func (s *Server) subtitleVTT(w http.ResponseWriter, r *http.Request, u store.Use
 		writeErr(w, http.StatusNotImplemented, "subtitle conversion needs ffmpeg on the server")
 		return
 	}
-	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	// An optimized copy's subtitles are its original's.
+	v, err := s.sourceVersion(r.Context(), r.PathValue("id"))
 	if err != nil || v.Missing {
 		writeErr(w, http.StatusNotFound, "file not found")
 		return
@@ -679,7 +679,7 @@ func (s *Server) subtitleVTT(w http.ResponseWriter, r *http.Request, u store.Use
 // subtitleTrack finds a version and one of its subtitle tracks from the
 // request path, writing the error itself when it can't.
 func (s *Server) subtitleTrack(w http.ResponseWriter, r *http.Request) (store.Version, store.Stream, bool) {
-	v, err := s.Store.GetVersion(r.Context(), r.PathValue("id"))
+	v, err := s.sourceVersion(r.Context(), r.PathValue("id"))
 	if err != nil || v.Missing {
 		writeErr(w, http.StatusNotFound, "file not found")
 		return v, store.Stream{}, false

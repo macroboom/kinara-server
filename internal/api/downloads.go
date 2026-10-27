@@ -636,7 +636,7 @@ func (s *Server) getDownload(w http.ResponseWriter, r *http.Request, u store.Use
 		case st.Type == "subtitle" && transcode.TextSubtitle(st.Codec):
 			out.Subtitles = append(out.Subtitles, ExternalSubtitle{Index: st.Index, Language: st.Language, Title: st.Title,
 				Format: "webvtt", Forced: st.Forced, Source: "file",
-				URL: "/api/v1/subtitles/" + v.ID + "/" + strconv.Itoa(st.Index)})
+				URL: "/api/v1/subtitles/" + v.ID + "/" + strconv.Itoa(st.Index) + ".vtt"})
 		}
 	}
 	if d.File.Audio == -1 && d.File.Quality != "original" {
@@ -814,7 +814,7 @@ func (s *Server) allDownloads(w http.ResponseWriter, r *http.Request, u store.Us
 	}
 	v := downloadsAdminView{Settings: ds, CanConvert: s.canPrepare(), Dir: s.DownloadDir,
 		Downloads: s.downloadViews(ctx, u, myDeviceID(r), list)}
-	v.UsedBytes, _ = s.copiesSize(ctx)
+	v.UsedBytes, _, _ = s.copiesSize(ctx)
 	if s.DownloadDir != "" {
 		if disk, ok := metrics.DiskUsage(s.DownloadDir); ok {
 			v.FreeBytes = int64(disk.Free)
@@ -864,6 +864,7 @@ func (s *Server) RunDownloads(ctx context.Context) {
 	if err := s.Store.RequeueInterrupted(ctx); err != nil {
 		s.Log.Warn("downloads: requeue", "err", err)
 	}
+	s.planOptimized(ctx)
 	s.kickDownloads()
 	s.cleanDownloads(ctx)
 	s.dl.mu.Lock()
@@ -876,7 +877,10 @@ func (s *Server) RunDownloads(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tidy.C:
+			// New files in optimized libraries get their copies.
+			s.planOptimized(ctx)
 			s.cleanDownloads(ctx)
+			s.kickDownloads()
 			continue
 		case <-kick:
 		}
@@ -915,7 +919,7 @@ func (s *Server) prepareCopy(parent context.Context, f store.DownloadFile) {
 		_ = s.Store.UpdateDownloadFile(parent, f)
 		return
 	}
-	if msg := s.makeRoom(parent, f.Estimate); msg != "" {
+	if msg := s.makeRoom(parent, f.Estimate, f.Optimized); msg != "" {
 		fail(msg)
 		return
 	}
@@ -927,6 +931,9 @@ func (s *Server) prepareCopy(parent context.Context, f store.DownloadFile) {
 	req := downloadTranscode(v, streams, p, f.Audio)
 	if it, err := s.Store.GetItem(parent, v.ItemID); err == nil {
 		req.Owner = transcode.Owner{DeviceName: "Download", ItemID: it.ID, VersionID: v.ID, Title: it.Title}
+		if f.Optimized {
+			req.Owner.DeviceName = "Optimized version"
+		}
 	}
 
 	ctx, cancel := context.WithCancel(parent)
@@ -1040,25 +1047,32 @@ func downloadTranscode(v store.Version, streams []store.Stream, p transcode.Down
 
 // --- Tidying up ---
 
-// copiesSize is the room prepared copies take.
-func (s *Server) copiesSize(ctx context.Context) (int64, error) {
+// copiesSize is the room prepared copies take: those for downloads (which
+// count against the owner's limit) and optimized versions.
+func (s *Server) copiesSize(ctx context.Context) (downloads, optimized int64, err error) {
 	uses, err := s.Store.DownloadFileUses(ctx)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	var total int64
 	for _, u := range uses {
-		if u.Path != "" && u.State == store.DownloadReady {
-			total += u.Size
+		if u.Path == "" || u.State != store.DownloadReady {
+			continue
+		}
+		if u.Optimized {
+			optimized += u.Size
+		} else {
+			downloads += u.Size
 		}
 	}
-	return total, nil
+	return downloads, optimized, nil
 }
 
 // makeRoom frees room for a copy of need bytes within the owner's limit
 // and the drive's free space, removing copies every device already has,
-// oldest first. It says why there isn't room ("" when there is).
-func (s *Server) makeRoom(ctx context.Context, need int64) string {
+// oldest first. It says why there isn't room ("" when there is). An
+// optimized version only needs room on the drive: the limit is for
+// downloads, and optimized versions are never removed to make room.
+func (s *Server) makeRoom(ctx context.Context, need int64, optimized bool) string {
 	ds, _ := s.Store.GetDownloadSettings(ctx)
 	limit := int64(ds.MaxGB) << 30
 	uses, err := s.Store.DownloadFileUses(ctx)
@@ -1068,13 +1082,16 @@ func (s *Server) makeRoom(ctx context.Context, need int64) string {
 	var used int64
 	var spare []store.DownloadFileUse
 	for _, u := range uses {
-		if u.Path == "" || u.State != store.DownloadReady {
+		if u.Path == "" || u.State != store.DownloadReady || u.Optimized {
 			continue
 		}
 		used += u.Size
 		if u.Unsaved == 0 {
 			spare = append(spare, u)
 		}
+	}
+	if optimized {
+		used, limit = 0, math.MaxInt64
 	}
 	sort.Slice(spare, func(i, j int) bool { return spare[i].LastSaved < spare[j].LastSaved })
 	free := func() int64 {
@@ -1122,7 +1139,7 @@ func (s *Server) cleanDownloads(ctx context.Context) {
 	known := map[string]bool{}
 	for _, u := range uses {
 		f := u.DownloadFile
-		if u.Downloads == 0 {
+		if u.Downloads == 0 && !f.Optimized {
 			s.dl.mu.Lock()
 			run := s.dl.running[f.ID]
 			if run != nil {
@@ -1142,6 +1159,15 @@ func (s *Server) cleanDownloads(ctx context.Context) {
 		known[filepath.Base(f.Path)] = true
 		lastUse := max(f.UsedAt, f.ReadyAt)
 		switch {
+		case f.Optimized:
+			// Kept while the owner's rule wants it (see optimize.go); only a
+			// replaced source file makes it again.
+			if v, err := s.Store.GetVersion(ctx, f.VersionID); err == nil && v.Mtime != f.SourceMtime && f.SourceMtime != 0 {
+				s.removeCopyFile(f)
+				f.State, f.Path, f.Size, f.Progress, f.ReadyAt = store.DownloadQueued, "", 0, 0, 0
+				_ = s.Store.UpdateDownloadFile(ctx, f)
+				s.kickDownloads()
+			}
 		case u.Unsaved == 0 && u.LastSaved > 0 && nowT.Sub(time.Unix(u.LastSaved, 0)) > keepAfterSaved,
 			nowT.Sub(time.Unix(lastUse, 0)) > keepUnused:
 			s.expireCopy(ctx, f)
