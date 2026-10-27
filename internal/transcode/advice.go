@@ -96,7 +96,7 @@ func (t *Transcoder) Advise(device, versionID string) Advice {
 	var others []LiveInfo
 	priorityBehind := false
 	for _, in := range infos {
-		if in.ID == mineInfo.ID {
+		if in.ID == mineInfo.ID || in.Kind == "download" {
 			continue
 		}
 		if in.Priority && in.Behind {

@@ -22,6 +22,39 @@ components:
       type: object
       properties:
         error: { type: string }
+    DownloadSettings:
+      type: object
+      properties:
+        enabled: { type: boolean, description: Apps can download titles to watch offline (default on) }
+        maxGB: { type: integer, description: Room prepared copies may take on the server (default 100) }
+        perUser: { type: integer, description: Downloads each account can have, 0 for no limit (default 200) }
+    Download:
+      type: object
+      properties:
+        id: { type: integer }
+        itemId: { type: string }
+        versionId: { type: string }
+        quality: { type: string, enum: [original, high, medium, low] }
+        state:
+          type: string
+          enum: [queued, preparing, ready, failed, expired]
+          description: expired means the prepared copy was removed to save room; fetching it prepares it again
+        progress: { type: number, description: Share prepared, 0 to 1 }
+        place: { type: integer, description: Copies ahead of this one in line (queued only) }
+        size: { type: integer, description: Bytes, once ready }
+        estimate: { type: integer, description: Expected bytes }
+        error: { type: string }
+        fileUrl: { type: string, description: 'Where to fetch it once ready (byte ranges; takes ?token=)' }
+        deviceId: { type: string }
+        deviceName: { type: string }
+        thisDevice: { type: boolean, description: Made on the device asking }
+        username: { type: string, description: Whose it is (owner's list only) }
+        createdAt: { type: integer }
+        readyAt: { type: integer }
+        savedAt: { type: integer, description: When the device said it has all of it }
+        item: { $ref: "#/components/schemas/Item" }
+        showTitle: { type: string }
+        showId: { type: string }
     BackupSettings:
       type: object
       properties:
@@ -1779,6 +1812,151 @@ paths:
       responses:
         "200": { description: Set }
         "400": { description: Not a JPEG or PNG, or too small }
+
+  /items/{id}/download:
+    get:
+      summary: Download qualities for a title, with expected sizes
+      description: |
+        For a movie or an episode, or a season or show (all its episodes, or
+        only unwatched ones with ?unwatched=1). "original" is the file as it
+        is; the others are prepared first as an MP4 any phone plays (H.264
+        and stereo AAC), and need ffmpeg on the server ("available").
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: unwatched, in: query, schema: { type: string, enum: ["1"] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  count: { type: integer, description: Movies or episodes covered }
+                  default: { type: string, description: The quality to pick unless the person chose one }
+                  qualities:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        label: { type: string }
+                        maxHeight: { type: integer }
+                        maxBitrate: { type: integer, description: kbit/s }
+                        estimate: { type: integer, description: Expected bytes for all of them }
+                        available: { type: boolean }
+
+  /downloads:
+    get:
+      summary: This account's downloads on all its devices (?device=this for just this one)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  downloads: { type: array, items: { $ref: "#/components/schemas/Download" } }
+    post:
+      summary: Download a title on this device
+      description: |
+        A movie or an episode, or every episode of a season or show
+        (unwatched ones only with "unwatched"). Asking again for a title
+        this device already has replaces its quality. Smaller qualities are
+        prepared one at a time in the background; follow them on GET
+        /downloads. Watch progress made offline goes back with PUT
+        /progress/{id} and clientTime.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [itemId]
+              properties:
+                itemId: { type: string }
+                versionId: { type: string, description: The file (a movie or an episode only) }
+                quality: { type: string, enum: [original, high, medium, low], description: Default medium (original without ffmpeg) }
+                audio: { type: integer, description: Audio stream index (default the profile's language, else the default track) }
+                unwatched: { type: boolean }
+      responses:
+        "201":
+          description: Added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  downloads: { type: array, items: { $ref: "#/components/schemas/Download" } }
+        "403": { description: Downloads are turned off }
+        "409": { description: The account has as many downloads as the owner allows }
+
+  /downloads/all:
+    get:
+      summary: Everyone's downloads, the room they take and the settings (owners only)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings: { $ref: "#/components/schemas/DownloadSettings" }
+                  canConvert: { type: boolean }
+                  usedBytes: { type: integer }
+                  freeBytes: { type: integer }
+                  dir: { type: string }
+                  downloads: { type: array, items: { $ref: "#/components/schemas/Download" } }
+
+  /downloads/settings:
+    put:
+      summary: Change the download settings (owners only)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DownloadSettings" }
+      responses:
+        "200": { description: Saved }
+
+  /downloads/{id}:
+    get:
+      summary: A download with what's needed to play it offline
+      description: |
+        Adds the file's details and markers ("version"), the audio track
+        kept ("audio"), and the text subtitles to save as WebVTT
+        ("subtitles"). Picture subtitles don't come along.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: OK }
+    delete:
+      summary: Remove a download (the server removes its copy once nobody wants it)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Removed }
+
+  /downloads/{id}/file:
+    get:
+      summary: Fetch a ready download (byte ranges; also takes ?token=)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: The file }
+        "206": { description: Part of the file }
+        "409": { description: Not ready yet, or being prepared again }
+
+  /downloads/{id}/saved:
+    post:
+      summary: Say this device has all of the file
+      description: The server removes its prepared copy a few days after every device that wanted it has it.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "204": { description: Noted }
 
   /backups:
     get:

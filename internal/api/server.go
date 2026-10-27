@@ -117,6 +117,10 @@ type Server struct {
 	restarting atomic.Bool
 	// subs searches and downloads subtitles (subtitles.go).
 	subs subsState
+	// DownloadDir holds copies prepared for downloads ("" turns preparing
+	// off; the original quality still works). See downloads.go.
+	DownloadDir string
+	dl          downloadsState
 
 	limiter *auth.Limiter
 	// tunnelLimiter counts failed sign-ins from all remote devices
@@ -273,6 +277,7 @@ func (s *Server) Handler() http.Handler {
 	s.backupRoutes(mux)
 	s.subtitleRoutes(mux)
 	s.editRoutes(mux)
+	s.downloadRoutes(mux)
 
 	// The web player and manager.
 	mux.Handle("GET /app/", s.webApp())

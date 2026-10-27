@@ -435,6 +435,10 @@ func serveUntil(parent context.Context, args []string) error {
 			hlsDir := c.cache("hls")
 			_ = os.RemoveAll(hlsDir)
 			srv.HLS = &transcode.HLS{T: srv.Transcoder, Dir: hlsDir}
+			// Copies prepared for downloads (phones and tablets saving a
+			// title to watch offline), one at a time in the background.
+			srv.DownloadDir = c.cache("downloads")
+			go srv.RunDownloads(ctx)
 		}
 		srv.Subtitles = &transcode.Subtitles{Tool: d.ffmpeg, Dir: c.cache("subtitles")}
 		srv.PGS = &pgs.Extractor{Tool: d.ffmpeg, FFprobe: c.ffprobe, Dir: c.cache("pgs"), Log: d.log}

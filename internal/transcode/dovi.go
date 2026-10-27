@@ -54,7 +54,7 @@ func (t *Transcoder) prepare(ctx context.Context, r *Request, caps ffmpeg.Caps) 
 		r.DV = t.dvInfo(ctx, r.Path)
 	}
 	dv := r.DV
-	mp4 := r.Container == "mp4" || r.Container == "hls"
+	mp4 := r.Container == "mp4" || r.Container == "hls" || r.Container == "file"
 	// Tags only exist in MP4 (fragmented MP4 HLS); MPEG-TS segments have none.
 	tagged := mp4 && !(r.Container == "hls" && r.Segments == "ts")
 

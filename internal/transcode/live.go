@@ -30,7 +30,7 @@ type Owner struct {
 // Live is a conversion running now.
 type Live struct {
 	ID        string
-	Kind      string // "pipe" or "hls"
+	Kind      string // "pipe", "hls" or "download"
 	Owner     Owner
 	Video     string
 	Bitrate   int
@@ -158,7 +158,8 @@ func (l *Live) info(now time.Time) LiveInfo {
 	in.PlayerLimited = (last.blocked-first.blocked).Seconds()/span.Seconds() > playerBound
 	// A stale reading (ffmpeg stopped reporting) isn't judged either.
 	fresh := now.Sub(last.at) < 2*window
-	in.Behind = fresh && now.Sub(l.StartedAt) >= warmup && in.Rate < keepUp && !in.PlayerLimited
+	// A download isn't watched as it's made, so it can't fall behind.
+	in.Behind = fresh && now.Sub(l.StartedAt) >= warmup && in.Rate < keepUp && !in.PlayerLimited && l.Kind != "download"
 	return in
 }
 

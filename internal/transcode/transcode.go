@@ -61,6 +61,9 @@ type Request struct {
 	Container string
 	// OutDir is where HLS writes its playlist and segments.
 	OutDir string
+	// OutFile is where a download is written (Container "file", set by
+	// Convert): a plain MP4 with its index at the front.
+	OutFile string
 	// Segments is the HLS segment kind: "fmp4" (the default; Apple players
 	// and browsers) or "ts" (MPEG-TS, what Roku players handle best).
 	Segments string
@@ -178,6 +181,10 @@ func (r *Request) Validate() error {
 		if r.OutDir == "" {
 			return errors.New("hls needs an output folder")
 		}
+	case "file":
+		if r.OutFile == "" {
+			return errors.New("a download needs a file to write")
+		}
 	default:
 		return errors.New(`container must be "mkv" or "mp4"`)
 	}
@@ -252,7 +259,7 @@ func Args(r Request, caps ffmpeg.Caps) []string {
 	} else {
 		a = append(a, "-map", "0:a:0?")
 	}
-	mp4 := r.Container == "mp4" || r.Container == "hls"
+	mp4 := r.Container == "mp4" || r.Container == "hls" || r.Container == "file"
 	hlsTS := r.Container == "hls" && r.Segments == "ts"
 	var subCodecs []string
 	for _, s := range r.Subtitles {
@@ -343,13 +350,18 @@ func Args(r Request, caps ffmpeg.Caps) []string {
 	}
 	a = append(a,
 		"-max_muxing_queue_size", "4096",
-		"-avoid_negative_ts", "make_zero",
+		"-avoid_negative_ts", "make_zero")
+	if r.Container != "file" {
 		// Send each packet as soon as it's muxed, and don't hold the start
 		// for up to 10 s waiting on a sparse track (subtitles): the first
 		// picture reaches the player sooner.
-		"-flush_packets", "1",
-		"-max_interleave_delta", "1000000")
+		a = append(a, "-flush_packets", "1", "-max_interleave_delta", "1000000")
+	}
 	switch {
+	case r.Container == "file":
+		// A plain MP4 with its index moved to the front once it's written,
+		// so a phone can play it (and seek in it) from storage.
+		a = append(a, "-movflags", "+faststart", "-f", "mp4", "-y", r.OutFile)
 	case hlsTS:
 		// MPEG-TS segments of about 4 s, listed as they're made.
 		a = append(a, "-f", "hls", "-hls_time", "4", "-hls_list_size", "0",
