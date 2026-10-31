@@ -315,15 +315,27 @@ func scan(ctx context.Context, root string, prev snapshot) (snapshot, error) {
 		return nil, &os.PathError{Op: "watch", Path: root, Err: os.ErrInvalid}
 	}
 	snap := make(snapshot)
-	if err := scanDir(ctx, root, root, prev, snap); err != nil {
+	if err := scanDir(ctx, root, root, prev, snap, map[string]bool{}); err != nil {
 		return snap, err
 	}
 	return snap, nil
 }
 
-func scanDir(ctx context.Context, root, dir string, prev, out snapshot) error {
+// scanDir records dir and the folders inside it, following linked folders
+// as the scanner does. seen holds the real locations walked so far, so a
+// link loop ends.
+func scanDir(ctx context.Context, root, dir string, prev, out snapshot, seen map[string]bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		if abs, err := filepath.Abs(real); err == nil {
+			real = abs
+		}
+		if seen[real] {
+			return nil
+		}
+		seen[real] = true
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -346,7 +358,15 @@ func scanDir(ctx context.Context, root, dir string, prev, out snapshot) error {
 	// os.ReadDir returns entries sorted by name, so the hash is stable.
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() { // symlinked and junctioned directories report false
+		isDir := e.IsDir()
+		if !isDir && e.Type()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+			// A linked or junctioned folder reports false; look at what
+			// it points at.
+			if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && fi.IsDir() {
+				isDir = true
+			}
+		}
+		if isDir {
 			if skipDir(name) {
 				continue
 			}
@@ -360,6 +380,9 @@ func scanDir(ctx context.Context, root, dir string, prev, out snapshot) error {
 			continue
 		}
 		info, err := e.Info()
+		if err == nil && e.Type()&os.ModeSymlink != 0 {
+			info, err = os.Stat(filepath.Join(dir, name)) // the linked file
+		}
 		if err != nil {
 			continue // vanished between ReadDir and Info
 		}
@@ -374,7 +397,7 @@ func scanDir(ctx context.Context, root, dir string, prev, out snapshot) error {
 	out[dir] = &dirSnap{sig: h.Sum64(), files: files}
 
 	for _, sub := range subdirs {
-		if err := scanDir(ctx, root, sub, prev, out); err != nil {
+		if err := scanDir(ctx, root, sub, prev, out, seen); err != nil {
 			return err
 		}
 	}

@@ -5,6 +5,7 @@ package backup
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -219,5 +220,90 @@ func TestPruneAndNames(t *testing.T) {
 		if ValidName(n) {
 			t.Errorf("%s should be refused", n)
 		}
+	}
+}
+
+// A restore that fails while putting the backup's files in place puts the
+// current ones back and isn't tried again; one that can't even do that
+// stops the server from starting until the owner has sorted it out.
+func TestApplyFailureRollsBack(t *testing.T) {
+	m, data := setup(t)
+	ctx := context.Background()
+	dir := filepath.Join(data, "backups")
+	info, err := m.Create(ctx, dir, ReasonManual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, _ := auth.HashPassword("password123")
+	m.Store.CreateUser(ctx, "sam", hash, false)
+	os.WriteFile(filepath.Join(data, "iroh", "secret.key"), []byte("new-key"), 0o600)
+	m.Store.Close()
+
+	defer func() { placeFile = os.Rename }()
+	calls := 0
+	placeFile = func(src, dst string) error {
+		if calls++; calls == 2 {
+			return errors.New("disk full")
+		}
+		return os.Rename(src, dst)
+	}
+	if err := Stage(data, filepath.Join(dir, info.Name), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = ApplyPending(data, m.EnvFile, nil)
+	if err == nil || errors.Is(err, ErrRestoreBroken) {
+		t.Fatalf("apply: %v", err)
+	}
+	if Pending(data) {
+		t.Fatal("a failed restore is tried again on the next start")
+	}
+	st, err := store.Open(filepath.Join(data, "kinara.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := st.CountUsers(ctx); n != 2 {
+		t.Fatalf("database after a failed restore has %d users, want the current 2", n)
+	}
+	st.Close()
+	if b, _ := os.ReadFile(filepath.Join(data, "iroh", "secret.key")); string(b) != "new-key" {
+		t.Fatalf("node key after a failed restore %q", b)
+	}
+
+	// Now the files can't be put back either.
+	if err := Stage(data, filepath.Join(dir, info.Name), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	calls = 0
+	old := filepath.Join(data, oldDir)
+	placeFile = func(src, dst string) error {
+		if calls++; calls == 2 {
+			os.RemoveAll(old) // the previous files are gone from restore-old
+			return errors.New("disk full")
+		}
+		return os.Rename(src, dst)
+	}
+	if _, err := ApplyPending(data, m.EnvFile, nil); !errors.Is(err, ErrRestoreBroken) {
+		t.Fatalf("apply: %v", err)
+	}
+	// Still refused on the next start.
+	if _, err := ApplyPending(data, m.EnvFile, nil); !errors.Is(err, ErrRestoreBroken) {
+		t.Fatalf("second start: %v", err)
+	}
+}
+
+// A backup staged by a newer server isn't applied by an older one.
+func TestApplyRefusesNewerSchema(t *testing.T) {
+	data := t.TempDir()
+	p := filepath.Join(data, "new.zip")
+	writeZip(t, p, map[string]string{"manifest.json": `{"format":1,"schema":9999,"version":"9.9"}`, "kinara.db": "x"})
+	if err := Stage(data, p, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(data, "kinara.db"), []byte("current"), 0o600)
+	if _, err := ApplyPending(data, "", nil); err == nil {
+		t.Fatal("applied a newer backup")
+	}
+	if b, _ := os.ReadFile(filepath.Join(data, "kinara.db")); string(b) != "current" {
+		t.Fatal("current database was moved")
 	}
 }

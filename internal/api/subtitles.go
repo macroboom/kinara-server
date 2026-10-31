@@ -15,6 +15,7 @@ import (
 	"kinara/internal/auth"
 	"kinara/internal/store"
 	"kinara/internal/subs"
+	"kinara/internal/subsync"
 )
 
 // Subtitle files outside the video: ones next to it (found by the
@@ -41,6 +42,15 @@ type ExternalSubtitle struct {
 	URL string `json:"url"`
 	// Removable: a download this account may delete.
 	Removable bool `json:"removable,omitempty"`
+	// Provider is the service a download came from; Auto: the server
+	// found it by itself; Sync says how checking it against the speech went
+	// (synced: its timing was corrected; already: it was right; unchecked;
+	// no_match: picked by hand and it doesn't seem to line up).
+	Provider string `json:"provider,omitempty"`
+	Auto     bool   `json:"auto,omitempty"`
+	Sync     string `json:"sync,omitempty"`
+	// Wrongable: it can be reported as wrong (downloads).
+	Wrongable bool `json:"wrongable,omitempty"`
 }
 
 func externalOf(versionID string, f store.SubtitleFile, u store.User) ExternalSubtitle {
@@ -48,7 +58,8 @@ func externalOf(versionID string, f store.SubtitleFile, u store.User) ExternalSu
 	return ExternalSubtitle{Index: idx, Language: f.Language, Title: f.Title, Format: f.Format, Forced: f.Forced,
 		HearingImpaired: f.HearingImpaired, Source: f.Source,
 		URL:       fmt.Sprintf("/api/v1/subtitles/%s/%d.vtt", versionID, idx),
-		Removable: f.Source == store.SubtitleDownload && (u.IsAdmin || f.AddedBy == u.ID)}
+		Removable: f.Source == store.SubtitleDownload && (u.IsAdmin || f.AddedBy == u.ID),
+		Provider:  f.Provider, Auto: f.Auto, Sync: f.SyncState, Wrongable: f.Source == store.SubtitleDownload}
 }
 
 func (s *Server) externalSubtitles(ctx context.Context, versionID string, u store.User) []ExternalSubtitle {
@@ -69,6 +80,7 @@ func (s *Server) subtitleRoutes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/v1/subtitles/{id}/files/{file}", s.user(s.deleteSubtitleFile))
 	mux.Handle("GET /api/v1/subtitles/settings", s.admin(s.getSubtitleSettings))
 	mux.Handle("PUT /api/v1/subtitles/settings", s.admin(s.putSubtitleSettings))
+	s.autoSubsRoutes(mux)
 }
 
 // serveExternalVTT answers /subtitles/{id}/{index}.vtt for a subtitle file.
@@ -89,7 +101,14 @@ func (s *Server) serveExternalVTT(w http.ResponseWriter, r *http.Request, v stor
 		return
 	}
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-	w.Header().Set("Cache-Control", "private, max-age=3600")
+	if t := subtitleTiming(f); !t.IsIdentity() {
+		// Lined up with the speech (autosubs.go): the file stays as it came,
+		// the correction is applied here. It can change, so no long caching.
+		vtt = subsync.RetimeVTT(vtt, t)
+		w.Header().Set("Cache-Control", "private, no-cache")
+	} else {
+		w.Header().Set("Cache-Control", "private, max-age=300")
+	}
 	w.Write(vtt)
 }
 
@@ -116,6 +135,13 @@ type SubtitleSettings struct {
 	Available bool `json:"available"`
 	// Account says how the account check went (on PUT with an account).
 	Account string `json:"account,omitempty"`
+
+	// Auto finds subtitles by itself in the profiles' languages
+	// (autosubs.go); Budget is how many a day.
+	Auto   bool `json:"auto"`
+	Budget int  `json:"budget"`
+	// Providers are the subtitle services, with their keys and today's use.
+	Providers []ProviderView `json:"providers"`
 }
 
 const (
@@ -134,7 +160,16 @@ func (s *Server) subtitleSettings(ctx context.Context) SubtitleSettings {
 		st.APIKey = "…" + k[max(0, len(k)-4):]
 	}
 	st.Available = s.subs.client != nil && s.subs.client.APIKey != ""
+	st.Auto, st.Budget = get(keyAutoSubs) != "false", s.autoSubsBudget(ctx)
+	st.Providers = s.providerViews(ctx)
 	return st
+}
+
+// SetBuiltinSubDLKey sets Kinara's own SubDL key (built into release builds).
+func (s *Server) SetBuiltinSubDLKey(key string) {
+	s.subs.mu.Lock()
+	s.subs.builtinSubDL = key
+	s.subs.mu.Unlock()
 }
 
 // ApplySubtitleSettings sets up the OpenSubtitles client and the DVD look
@@ -172,6 +207,13 @@ func (s *Server) putSubtitleSettings(w http.ResponseWriter, r *http.Request, u s
 		Username *string `json:"username"`
 		Password *string `json:"password"`
 		APIKey   *string `json:"apiKey"`
+		Auto     *bool   `json:"auto"`
+		Budget   *int    `json:"budget"`
+		// SubDLKey and JimakuKey are the owner's keys ("" removes one).
+		SubDLKey  *string `json:"subdlKey"`
+		JimakuKey *string `json:"jimakuKey"`
+		// Providers turns services on or off by name.
+		Providers map[string]bool `json:"providers"`
 	}
 	if err := readJSON(r, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -206,6 +248,34 @@ func (s *Server) putSubtitleSettings(w http.ResponseWriter, r *http.Request, u s
 	if in.APIKey != nil && !set(keySubsAPIKey, strings.TrimSpace(*in.APIKey)) {
 		return
 	}
+	if in.Auto != nil && !set(keyAutoSubs, strconv.FormatBool(*in.Auto)) {
+		return
+	}
+	if in.Budget != nil {
+		if *in.Budget < 0 || *in.Budget > 1000 {
+			writeErr(w, http.StatusBadRequest, "the daily number must be between 0 and 1000")
+			return
+		}
+		if !set(keyAutoSubsBudget, strconv.Itoa(*in.Budget)) {
+			return
+		}
+	}
+	if in.SubDLKey != nil && !set(keySubDLKey, strings.TrimSpace(*in.SubDLKey)) {
+		return
+	}
+	if in.JimakuKey != nil && !set(keyJimakuKey, strings.TrimSpace(*in.JimakuKey)) {
+		return
+	}
+	for name, on := range in.Providers {
+		switch name {
+		case subs.ProviderOpenSubtitles, subs.ProviderSubDL, subs.ProviderSubvault, subs.ProviderJimaku:
+		default:
+			continue
+		}
+		if !set(keyProviderOff+name, strconv.FormatBool(!on)) {
+			return
+		}
+	}
 	s.ApplySubtitleSettings(ctx, "")
 	st := s.subtitleSettings(ctx)
 	// A changed account is tried straight away, so the owner knows.
@@ -217,8 +287,17 @@ func (s *Server) putSubtitleSettings(w http.ResponseWriter, r *http.Request, u s
 			st.Account = err.Error()
 		} else {
 			st.Account = fmt.Sprintf("Signed in: %d downloads a day.", n)
+			s.subs.mu.Lock()
+			s.subs.osAllowed = n
+			s.subs.mu.Unlock()
+			st.Providers = s.providerViews(ctx)
 		}
 	}
+	// New services or settings: plan and look again.
+	go func() {
+		s.planAutoSubs(s.BaseCtx)
+		s.kickAutoSubs()
+	}()
 	writeJSON(w, http.StatusOK, st)
 }
 
@@ -232,6 +311,13 @@ type subsState struct {
 	builtinKey string
 	cache      map[string]subsCacheEntry
 	limiter    *auth.Limiter
+	// osAllowed is the owner's OpenSubtitles account's daily downloads (0
+	// when unknown or no account).
+	osAllowed int
+	// builtinSubDL is Kinara's own SubDL key ("" for none).
+	builtinSubDL string
+	// Service addresses ("" for the real ones; tests point them elsewhere).
+	subdlBase, subdlDLBase, subvaultBase, jimakuBase string
 }
 
 type subsCacheEntry struct {
@@ -282,14 +368,16 @@ func (s *Server) subtitleQuery(ctx context.Context, v store.Version) (subs.Query
 	return q, nil
 }
 
-// searchSubtitles: GET /subtitles/{id}/search?languages=en,es
+// searchSubtitles: GET /subtitles/{id}/search?languages=en,es. Every
+// subtitle service that's on is asked at once; results are listed with
+// the service they came from, the likeliest first.
 func (s *Server) searchSubtitles(w http.ResponseWriter, r *http.Request, u store.User) {
 	if !s.mayUseSubtitles(r.Context(), u) {
 		writeErr(w, http.StatusForbidden, "the server's owner has turned subtitle downloads off for other accounts")
 		return
 	}
-	c := s.subs.client
-	if c == nil || c.APIKey == "" {
+	providers := s.autoProviders(r.Context())
+	if len(providers) == 0 {
 		writeErr(w, http.StatusNotImplemented, subs.ErrNoKey.Error())
 		return
 	}
@@ -324,16 +412,49 @@ func (s *Server) searchSubtitles(w http.ResponseWriter, r *http.Request, u store
 	q.Languages = langs
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	results, err := c.Search(ctx, q)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, err.Error())
+	type answer struct {
+		i   int
+		res []subs.Result
+		err error
+	}
+	var asked []subs.Provider
+	for _, p := range providers {
+		if p.Covers(q) {
+			asked = append(asked, p)
+		}
+	}
+	ch := make(chan answer, len(asked))
+	for i, p := range asked {
+		go func() {
+			res, err := p.Search(ctx, q)
+			ch <- answer{i, res, err}
+		}()
+	}
+	var cands []candidate
+	var firstErr error
+	for range asked {
+		a := <-ch
+		if a.err != nil && firstErr == nil {
+			firstErr = a.err
+		}
+		if asked[a.i].Name() == subs.ProviderSubDL {
+			_, _ = s.Store.CountSubtitleUse(r.Context(), subs.ProviderSubDL, today())
+		}
+		for _, res := range a.res {
+			cands = append(cands, candidate{Result: res, provider: asked[a.i], order: a.i})
+		}
+	}
+	if len(cands) == 0 && firstErr != nil {
+		writeErr(w, http.StatusBadGateway, firstErr.Error())
 		return
 	}
-	if len(results) > 60 {
-		results = results[:60]
+	rankCandidates(cands, v.RelPath)
+	results := make([]subs.Result, 0, len(cands))
+	for _, c := range cands {
+		results = append(results, c.Result)
 	}
-	if results == nil {
-		results = []subs.Result{}
+	if len(results) > 80 {
+		results = results[:80]
 	}
 	s.subs.mu.Lock()
 	if s.subs.cache == nil || len(s.subs.cache) > 500 {
@@ -345,6 +466,10 @@ func (s *Server) searchSubtitles(w http.ResponseWriter, r *http.Request, u store
 }
 
 type subtitleDownload struct {
+	// Provider and Key say which result (as search gave them); FileID
+	// alone means OpenSubtitles (older apps).
+	Provider        string `json:"provider"`
+	Key             string `json:"key"`
 	FileID          int    `json:"fileId"`
 	Language        string `json:"language"`
 	Release         string `json:"release"`
@@ -354,15 +479,12 @@ type subtitleDownload struct {
 
 // downloadSubtitle: POST /subtitles/{id}/download, a result from search.
 // The file is kept in the data folder and listed with the video for
-// everyone; the same file asked for again isn't downloaded twice.
+// everyone; the same file asked for again isn't downloaded twice. It's
+// then checked against the speech in the background, and its timing
+// corrected when it's off.
 func (s *Server) downloadSubtitle(w http.ResponseWriter, r *http.Request, u store.User) {
 	if !s.mayUseSubtitles(r.Context(), u) {
 		writeErr(w, http.StatusForbidden, "the server's owner has turned subtitle downloads off for other accounts")
-		return
-	}
-	c := s.subs.client
-	if c == nil || c.APIKey == "" {
-		writeErr(w, http.StatusNotImplemented, subs.ErrNoKey.Error())
 		return
 	}
 	v, err := s.sourceVersion(r.Context(), r.PathValue("id"))
@@ -371,14 +493,33 @@ func (s *Server) downloadSubtitle(w http.ResponseWriter, r *http.Request, u stor
 		return
 	}
 	var req subtitleDownload
-	if err := readJSON(r, &req); err != nil || req.FileID <= 0 {
-		writeErr(w, http.StatusBadRequest, "fileId from a search result is needed")
+	if err := readJSON(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	provider := strconv.Itoa(req.FileID)
+	if req.Provider == "" {
+		req.Provider = subs.ProviderOpenSubtitles
+	}
+	if req.Key == "" && req.FileID > 0 {
+		req.Key = strconv.Itoa(req.FileID)
+	}
+	if req.Key == "" {
+		writeErr(w, http.StatusBadRequest, "a result from search is needed")
+		return
+	}
+	var provider subs.Provider
+	for _, p := range s.autoProviders(r.Context()) {
+		if p.Name() == req.Provider {
+			provider = p
+		}
+	}
+	if provider == nil {
+		writeErr(w, http.StatusBadRequest, "that subtitle service isn't on")
+		return
+	}
 	have, _ := s.Store.SubtitleFiles(r.Context(), v.ID)
 	for _, f := range have {
-		if f.Source == store.SubtitleDownload && f.ProviderID == provider {
+		if f.Source == store.SubtitleDownload && f.ProviderID == req.Key && firstNonEmpty(f.Provider, subs.ProviderOpenSubtitles) == req.Provider {
 			if _, err := os.Stat(s.dataPath(f.Path)); err == nil {
 				writeJSON(w, http.StatusOK, externalOf(v.ID, f, u))
 				return
@@ -400,7 +541,10 @@ func (s *Server) downloadSubtitle(w http.ResponseWriter, r *http.Request, u stor
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	body, err := c.Download(ctx, req.FileID)
+	res := subs.Result{Provider: req.Provider, Key: req.Key, FileID: req.FileID, Language: req.Language, Release: req.Release,
+		HearingImpaired: req.HearingImpaired, Forced: req.Forced}
+	body, err := provider.Fetch(ctx, res)
+	_, _ = s.Store.CountSubtitleUse(r.Context(), req.Provider, today())
 	if err != nil {
 		status := http.StatusBadGateway
 		var se *subs.StatusError
@@ -413,36 +557,13 @@ func (s *Server) downloadSubtitle(w http.ResponseWriter, r *http.Request, u stor
 	if !u.IsAdmin {
 		lim.Fail(who)
 	}
-	lang := subs.Language(req.Language)
-	dir := filepath.Join(s.DataDir, "subtitles", v.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	f, _, err := s.saveSubtitle(r.Context(), v, res, body, u.ID, false)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "the subtitle file couldn't be read: "+err.Error())
 		return
 	}
-	name := "opensubtitles-" + provider
-	if lang != "" {
-		name += "." + lang
-	}
-	path := filepath.Join(dir, name+".srt")
-	if err := os.WriteFile(path, subs.UTF8(body), 0o644); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	title := strings.TrimSpace(req.Release)
-	if len(title) > 80 {
-		title = title[:80]
-	}
-	// Kept relative to the data folder, so a backup restored on another
-	// computer still finds it.
-	rel := dataPrefix + filepath.ToSlash(filepath.Join("subtitles", v.ID, name+".srt"))
-	f := store.SubtitleFile{VersionID: v.ID, Path: rel, Language: lang, Title: title, Format: "subrip",
-		Forced: req.Forced, HearingImpaired: req.HearingImpaired, Source: store.SubtitleDownload,
-		ProviderID: provider, AddedBy: u.ID}
-	if err := s.Store.AddSubtitleFile(r.Context(), &f); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.Log.Info("subtitle downloaded", "by", u.Username, "version", v.ID, "language", lang, "opensubtitles", provider)
+	s.Log.Info("subtitle downloaded", "by", u.Username, "version", v.ID, "language", f.Language, "service", req.Provider)
+	go s.syncSubtitleFile(v.ID, f.ID)
 	writeJSON(w, http.StatusCreated, externalOf(v.ID, f, u))
 }
 

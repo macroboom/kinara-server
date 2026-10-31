@@ -255,6 +255,7 @@ func (s *Server) effectivePrefs(r *http.Request, profileID int64, topID string) 
 		}
 		if t.SubtitleMode != "" {
 			out.SubtitleMode = t.SubtitleMode
+			out.Chosen = true
 		}
 	}
 	return out

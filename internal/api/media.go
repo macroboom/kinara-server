@@ -485,6 +485,7 @@ func (s *Server) transcodeRequest(r *http.Request) (transcode.Request, store.Ver
 	if err != nil || v.Missing {
 		return transcode.Request{}, v, http.StatusNotFound, errors.New("file not found")
 	}
+	s.autoSubsPlaying(s.sourceVersionID(r.Context(), r.PathValue("id")))
 	if _, err := os.Stat(v.Path); err != nil {
 		return transcode.Request{}, v, http.StatusNotFound, errors.New("file not available")
 	}

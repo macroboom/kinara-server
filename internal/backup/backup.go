@@ -34,6 +34,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -436,6 +437,9 @@ func Pending(dataDir string) bool {
 // (replacing an earlier one) rather than being deleted. It returns the
 // manifest of what was restored (nil when nothing was waiting).
 func ApplyPending(dataDir, envFile string, log *slog.Logger) (*Manifest, error) {
+	if b, err := os.ReadFile(filepath.Join(dataDir, brokenName)); err == nil {
+		return nil, fmt.Errorf("%w (%s)", ErrRestoreBroken, strings.TrimSpace(string(b)))
+	}
 	pending := filepath.Join(dataDir, pendingName)
 	if _, err := os.Stat(pending); err != nil {
 		return nil, nil
@@ -455,6 +459,13 @@ func ApplyPending(dataDir, envFile string, log *slog.Logger) (*Manifest, error) 
 		zr.Close()
 		os.Rename(pending, pending+".bad")
 		return nil, err
+	}
+	// Staged by a newer server, then this older one started: its database
+	// couldn't be opened here, so nothing is touched.
+	if man.Schema > store.SchemaVersion() {
+		zr.Close()
+		os.Rename(pending, pending+".bad")
+		return nil, fmt.Errorf("the backup was made by Kinara %s, which is newer than this server; update the server and restore it again (left as %s)", man.Version, pendingName+".bad")
 	}
 
 	// Unpack into a new folder first, so a failure leaves everything as it was.
@@ -487,12 +498,41 @@ func ApplyPending(dataDir, envFile string, log *slog.Logger) (*Manifest, error) 
 	}
 	moves := []string{dbName, dbName + "-wal", dbName + "-shm"}
 	moves = append(moves, identity...)
+	var moved, placed []string
+	// undo puts the current files back after a failure past this point,
+	// so the server opens the library it had. When that fails too, the
+	// error is ErrRestoreBroken: the server must not open (it would make
+	// a new, empty library over the real one).
+	undo := func(cause error) error {
+		os.RemoveAll(in)
+		var bad []string
+		for _, n := range placed {
+			if err := os.RemoveAll(filepath.Join(dataDir, n)); err != nil {
+				bad = append(bad, n)
+			}
+		}
+		for _, n := range moved {
+			if err := os.Rename(filepath.Join(old, n), filepath.Join(dataDir, n)); err != nil {
+				bad = append(bad, n)
+			}
+		}
+		failed(pending)
+		if len(bad) > 0 {
+			err := fmt.Errorf("%w: %v; putting the previous files back failed too (%s): move them back from %s by hand, then delete %s", ErrRestoreBroken, cause, strings.Join(bad, ", "), old, filepath.Join(dataDir, brokenName))
+			// Remembered, so a restart (the Windows service restarts on
+			// failure) doesn't open an empty library either.
+			os.WriteFile(filepath.Join(dataDir, brokenName), []byte(err.Error()+"\n"), 0o600)
+			return err
+		}
+		return cause
+	}
 	for _, n := range moves {
 		src := filepath.Join(dataDir, n)
 		if _, err := os.Stat(src); err == nil {
 			if err := os.Rename(src, filepath.Join(old, n)); err != nil {
-				return nil, fmt.Errorf("moving %s aside: %w", n, err)
+				return nil, undo(fmt.Errorf("moving %s aside: %w", n, err))
 			}
+			moved = append(moved, n)
 		}
 	}
 	if opts.Settings && envFile != "" {
@@ -510,15 +550,18 @@ func ApplyPending(dataDir, envFile string, log *slog.Logger) (*Manifest, error) 
 		if rel == envName {
 			return nil // below
 		}
+		top := strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
+		if !slices.Contains(placed, top) {
+			placed = append(placed, top)
+		}
 		dst := filepath.Join(dataDir, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 			return err
 		}
-		return os.Rename(p, dst)
+		return placeFile(p, dst)
 	})
 	if err != nil {
-		os.RemoveAll(in)
-		return nil, fmt.Errorf("restoring: %w (the previous files are in %s)", err, old)
+		return nil, undo(fmt.Errorf("restoring: %w", err))
 	}
 	// The settings file, when asked. It may live where the server can't
 	// write (/etc/kinara on Linux): then it's left for the owner to copy.
@@ -541,6 +584,23 @@ func ApplyPending(dataDir, envFile string, log *slog.Logger) (*Manifest, error) 
 			"version", man.Version, "host", man.Host, "previous files", old)
 	}
 	return &man, nil
+}
+
+// ErrRestoreBroken is ApplyPending failing in a way that left the data
+// folder without its database. The server must not start on it.
+var ErrRestoreBroken = errors.New("restoring a backup failed partway")
+
+// placeFile moves a restored file into place (a variable for tests).
+var placeFile = os.Rename
+
+// brokenName marks a data folder ApplyPending left without its database.
+const brokenName = "restore-broken.txt"
+
+// failed renames a staged backup that couldn't be restored, so the next
+// start doesn't try it again.
+func failed(pending string) {
+	os.Remove(pending + ".failed")
+	os.Rename(pending, pending+".failed")
 }
 
 func copyFile(src, dst string) error {

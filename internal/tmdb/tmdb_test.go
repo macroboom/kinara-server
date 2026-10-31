@@ -98,3 +98,19 @@ func TestRecommendationsFallsBackToSimilar(t *testing.T) {
 		t.Fatalf("results %+v", p.Results)
 	}
 }
+
+// A failed connection's error doesn't carry the key: it reaches users.
+func TestErrorHidesKey(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	base := srv.URL
+	srv.Close() // nothing listens there now
+	c := New("secret-v3-key")
+	c.BaseURL = base
+	_, err := c.SearchMovie(context.Background(), "Heat", 1995)
+	if err == nil {
+		t.Fatal("no error from a closed server")
+	}
+	if strings.Contains(err.Error(), "secret-v3-key") || strings.Contains(err.Error(), "api_key") {
+		t.Fatalf("error shows the key: %v", err)
+	}
+}

@@ -13,6 +13,11 @@
 #                                      kinara-server_amd64.deb, kinara-server_arm64.deb
 #   server/latest.json               the newest version, and each file's link,
 #                                    size and SHA-256 (the website shows these)
+#   server/latest-signed.json        the same, signed with Kinara's release key:
+#                                    { "payload": base64, "signature": base64 }.
+#                                    Servers read this one and install an update
+#                                    only when the signature matches the key
+#                                    built into them (internal/update/update-key.pub).
 #
 # A pre-release (a version with a "-", like 0.2.0-rc.1) goes in server/<version>/
 # only: latest/ and latest.json stay on the last real release.
@@ -21,6 +26,17 @@
 #   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY  (as for the APT repository)
 #   R2_DOWNLOADS_BUCKET   the bucket behind dl.kinara.media
 #   DOWNLOADS_URL         its public address (default https://dl.kinara.media)
+#   UPDATE_SIGNING_KEY    the release key (Ed25519, PEM), which signs latest-signed.json
+#
+# Making the release key (once), with OpenSSL 3:
+#   openssl genpkey -algorithm ed25519 -out kinara-release.pem
+#   openssl pkey -in kinara-release.pem -pubout -outform DER | tail -c 32 | base64
+# The second command prints the public key: put that line in
+# internal/update/update-key.pub and commit it. Put the whole of
+# kinara-release.pem in the UPDATE_SIGNING_KEY secret, and keep the file
+# somewhere safe and offline. Losing it means servers can't take updates
+# until they're reinstalled by hand with a build that has a new key. A
+# release is refused here if the key doesn't match update-key.pub.
 #
 # Setting up the bucket (once), in the Cloudflare dashboard, R2:
 #   1. Create a bucket, e.g. kinara-downloads; Settings, Custom Domains:
@@ -40,6 +56,23 @@ for v in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_DOWNLOADS_BUCKET
 done
 base="${DOWNLOADS_URL:-https://dl.kinara.media}"
 base="${base%/}"
+
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+# The release key, checked against the one built into the servers before
+# anything is uploaded (pre-releases don't touch latest-signed.json).
+keyfile=""
+case "$version" in *-*) ;; *)
+  [ -n "${UPDATE_SIGNING_KEY:-}" ] || { echo "UPDATE_SIGNING_KEY is not set" >&2; exit 2; }
+  keyfile="$(mktemp)"
+  printf '%s\n' "$UPDATE_SIGNING_KEY" > "$keyfile"
+  pub="$(openssl pkey -in "$keyfile" -pubout -outform DER | tail -c 32 | base64)"
+  built="$(grep -v '^#' "$(dirname "$0")/../internal/update/update-key.pub" | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')"
+  [ "$pub" = "$built" ] || { echo "UPDATE_SIGNING_KEY doesn't match internal/update/update-key.pub, so servers would refuse this release" >&2; rm -f "$keyfile"; exit 2; }
+  ;;
+esac
 
 export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
 export AWS_DEFAULT_REGION=auto
@@ -68,7 +101,7 @@ entries=()
 for f in "$@"; do
   [ -f "$f" ] || { echo "no such file: $f" >&2; exit 2; }
   name="$(basename "$f")"
-  sum="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$f" | cut -d' ' -f1)"
+  sum="$(sha256 "$f")"
   size="$(wc -c < "$f" | tr -d ' ')"
   printf '%s  %s\n' "$sum" "$name" > "$f.sha256.publish"
 
@@ -96,7 +129,8 @@ if [ "$prerelease" = 1 ]; then
 fi
 
 json="$(mktemp)"
-trap 'rm -f "$json"' EXIT
+signed="$(mktemp)"
+trap 'rm -f "$json" "$signed" "$keyfile"' EXIT
 {
   printf '{\n  "version": "%s",\n  "date": "%s",\n' "$version" "$(date -u +%Y-%m-%d)"
   printf '  "notes": "https://github.com/macroboom/kinara-server/releases/tag/v%s",\n' "$version"
@@ -109,5 +143,9 @@ trap 'rm -f "$json"' EXIT
   printf '  }\n}\n'
 } > "$json"
 cat "$json"
+sig="$(openssl pkeyutl -sign -inkey "$keyfile" -rawin -in "$json" | base64 | tr -d '\n')"
+printf '{ "payload": "%s", "signature": "%s" }\n' "$(base64 < "$json" | tr -d '\n')" "$sig" > "$signed"
+echo "==> server/latest-signed.json"
+put "$signed" "$bucket/server/latest-signed.json" --cache-control "public, max-age=300" --content-type application/json
 echo "==> server/latest.json"
 put "$json" "$bucket/server/latest.json" --cache-control "public, max-age=300" --content-type application/json

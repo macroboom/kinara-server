@@ -31,17 +31,22 @@ Upgrading is installing a newer package; settings and data stay.
 
 ## Updates
 
-The server checks `dl.kinara.media/server/latest.json` twice a day (the
-owner can turn this off under Manage, Updates, or with
-`KINARA_UPDATE_URL=off`). When a newer version is out, the Manage pages show
-it and the menu bar item gets "Update to Kinara X…". **Update** downloads
-`Kinara-<version>-macOS.pkg` into `~/Library/Caches/Kinara/updates`, checks
-its size and SHA-256 against latest.json, that it's signed by Macroboom LLC
-(`pkgutil --check-signature`) and that macOS accepts it as notarized
-(`spctl`), then runs `installer` behind macOS's own administrator password
-prompt. The postinstall restarts the server and the menu bar item; the
-package is deleted when the installer ends, and the new server empties the
-updates folder when it starts.
+The server checks `dl.kinara.media/server/latest-signed.json` twice a day
+(the owner can turn this off under Manage, Updates, or with
+`KINARA_UPDATE_URL=off`). That's the release list signed with Kinara's
+release key; a server only installs from a list whose signature matches the
+key built into it (`internal/update/update-key.pub`). When a newer version
+is out, the Manage pages show it and the menu bar item gets "Update to
+Kinara X…". **Update** downloads `Kinara-<version>-macOS.pkg` into the
+`updates` folder in the data folder, checks its size and SHA-256 against the
+signed list, that it's signed by Macroboom LLC (`pkgutil
+--check-signature`) and that macOS accepts it as notarized (`spctl`). Then,
+behind macOS's own administrator password prompt, a root shell copies it
+into a folder only root can change, checks that copy again (checksum,
+signature, notarization) and runs `installer` on the copy. The postinstall
+restarts the server and the menu bar item; both copies are deleted when the
+installer ends, and the new server empties the updates folder when it
+starts.
 
 ## One-time setup (on the Mac that builds)
 

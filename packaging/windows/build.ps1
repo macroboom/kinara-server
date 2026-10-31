@@ -39,6 +39,9 @@ param(
   # Kinara's OpenSubtitles.com API key, for finding subtitles. Default:
   # opensubtitles.key next to this script, else $env:KINARA_OPENSUBTITLES_KEY.
   [string]$OpenSubtitlesKey = "",
+  # Kinara's SubDL.com API key, for automatic subtitles. Default: subdl.key
+  # next to this script, else $env:KINARA_SUBDL_KEY.
+  [string]$SubDLKey = "",
   [switch]$SkipWeb,
   [switch]$SkipSidecar
 )
@@ -111,6 +114,13 @@ try {
   }
   if ($OpenSubtitlesKey -match '\s') { throw "the OpenSubtitles key has spaces in it" }
   if ($OpenSubtitlesKey) { $serverFlags += " -X main.builtinOpenSubtitlesKey=$OpenSubtitlesKey" }
+  if (-not $SubDLKey) {
+    $sdFile = Join-Path $here "subdl.key"
+    if (Test-Path $sdFile) { $SubDLKey = (Get-Content $sdFile -Raw).Trim() }
+    elseif ($env:KINARA_SUBDL_KEY) { $SubDLKey = $env:KINARA_SUBDL_KEY.Trim() }
+  }
+  if ($SubDLKey -match '\s') { throw "the SubDL key has spaces in it" }
+  if ($SubDLKey) { $serverFlags += " -X main.builtinSubDLKey=$SubDLKey" }
   go build -trimpath -ldflags $serverFlags -o (Join-Path $stage "kinara-server.exe") ./cmd/kinara-server; Check-Exit "go build server"
   go build -trimpath -ldflags "-s -w -H=windowsgui" -o (Join-Path $stage "kinara-tray.exe") ./cmd/kinara-tray; Check-Exit "go build tray"
 } finally { Pop-Location }

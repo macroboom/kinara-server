@@ -224,13 +224,17 @@ func scanDownload(sc interface{ Scan(...any) error }) (Download, error) {
 	return d, err
 }
 
-// prefixScanner scans some leading columns before the ones asked for.
+// prefixScanner scans some columns before (pre) and after (post) the ones asked for.
 type prefixScanner struct {
-	sc  interface{ Scan(...any) error }
-	pre []any
+	sc   interface{ Scan(...any) error }
+	pre  []any
+	post []any
 }
 
-func (p *prefixScanner) Scan(dest ...any) error { return p.sc.Scan(append(p.pre, dest...)...) }
+func (p *prefixScanner) Scan(dest ...any) error {
+	all := append(append(append([]any{}, p.pre...), dest...), p.post...)
+	return p.sc.Scan(all...)
+}
 
 func (s *Store) queryDownloads(ctx context.Context, where string, args ...any) ([]Download, error) {
 	rows, err := s.db.QueryContext(ctx, downloadSelect+` `+where+` ORDER BY d.created_at DESC, d.id DESC`, args...)

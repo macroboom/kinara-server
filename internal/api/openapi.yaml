@@ -2010,6 +2010,43 @@ paths:
       responses:
         "200": { description: OK }
 
+  /subtitles/{id}/auto:
+    get:
+      summary: A file's subtitle files and the automatic search for it
+      description: |
+        Players ask while playing: it also puts the file at the front of the
+        automatic subtitle line. "wanted" lists the languages being looked
+        for (state wanted, found or missing), "searching" says the server is
+        looking at this file now. Subtitles found are checked against the
+        film's speech and served with their timing corrected.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: OK }
+
+  /subtitles/{id}/files/{file}/wrong:
+    post:
+      summary: Say a downloaded subtitle is wrong
+      description: It's never picked for this file again, removed when the server fetched it, and the next one is looked for straight away.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: file, in: path, required: true, schema: { type: integer }, description: The subtitle's index (1000000 and up) }
+      responses:
+        "200": { description: OK }
+        "400": { description: A file next to the video (the owner's own) }
+
+  /subtitles/auto:
+    get:
+      summary: Automatic subtitles, the services and today's use, and what's missing (owners only)
+      responses:
+        "200": { description: OK }
+
+  /subtitles/auto/retry:
+    post:
+      summary: Look again for missing subtitles (all, or one file's with versionId; owners only)
+      responses:
+        "200": { description: How many were put back in line }
+
   /backups:
     get:
       summary: Backups, their settings and the next nightly one (owners only)

@@ -12,6 +12,6 @@ func canLaunch(kind string) bool { return false }
 
 func verify(ctx context.Context, kind, path string) error { return nil }
 
-func launch(kind, path, version, dir string, ended func(error)) error {
+func launch(kind, path, version, sha, dir string, ended func(error)) error {
 	return errors.New("this install is updated with " + how(kind))
 }

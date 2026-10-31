@@ -69,7 +69,12 @@ type Query struct {
 
 // Result is one subtitle file found.
 type Result struct {
-	FileID   int    `json:"fileId"`
+	// Provider is the service it's from ("opensubtitles", "subdl",
+	// "subvault", "jimaku"), and Key what that service knows it by.
+	Provider string `json:"provider"`
+	Key      string `json:"key"`
+	// FileID is OpenSubtitles' number for it (OpenSubtitles results only).
+	FileID   int    `json:"fileId,omitempty"`
 	Language string `json:"language"` // three-letter code, as tracks use
 	// Release is the release the subtitle was timed for.
 	Release         string  `json:"release"`
@@ -84,8 +89,10 @@ type Result struct {
 	Trusted bool    `json:"trusted"`
 	FPS     float64 `json:"fps,omitempty"`
 	// HashMatch: made for this exact file, so the timing fits.
-	HashMatch bool   `json:"hashMatch"`
-	Uploader  string `json:"uploader,omitempty"`
+	HashMatch bool `json:"hashMatch"`
+	// Episode picks the file out of a season's archive (SubDL).
+	Episode  int    `json:"episode,omitempty"`
+	Uploader string `json:"uploader,omitempty"`
 }
 
 func (o *OpenSubtitles) client() *http.Client {
@@ -328,7 +335,7 @@ func (o *OpenSubtitles) Search(ctx context.Context, q Query) ([]Result, error) {
 		a := d.Attributes
 		for _, f := range a.Files {
 			out = append(out, Result{
-				FileID: f.FileID, Language: Language(a.Language), Release: a.Release, FileName: f.FileName,
+				Provider: ProviderOpenSubtitles, Key: strconv.Itoa(f.FileID), FileID: f.FileID, Language: Language(a.Language), Release: a.Release, FileName: f.FileName,
 				Downloads: a.DownloadCount, Rating: a.Ratings, HearingImpaired: a.HearingImpaired,
 				Forced: a.ForeignPartsOnly, AI: a.AITranslated, Machine: a.MachineTranslated,
 				Trusted: a.FromTrusted, FPS: a.FPS, HashMatch: a.MoviehashMatch, Uploader: a.Uploader.Name,

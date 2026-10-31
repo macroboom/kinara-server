@@ -4,6 +4,7 @@ package update
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -37,11 +38,31 @@ func verify(ctx context.Context, kind, path string) error {
 // runs as you, and installing needs an administrator). The package's
 // postinstall restarts the server and the menu bar item. The installer runs
 // in a session of its own, so it keeps going when launchd stops this
-// server; the package is deleted when it ends, whatever happened.
-func launch(kind, path, version, dir string, ended func(error)) error {
-	script := fmt.Sprintf(`set p to %s
-do shell script "/usr/sbin/installer -pkg " & quoted form of p & " -target / ; rc=$? ; /bin/rm -f " & quoted form of p & " ; exit $rc" with prompt %s with administrator privileges`,
-		appleString(path), appleString("Kinara is updating to version "+version+"."))
+// server.
+//
+// The downloaded file sits in a folder this account can write, so the
+// script that runs as root first copies it into a folder of its own that
+// only root can change, checks that copy (checksum, Macroboom's signature,
+// notarization) and installs that copy, not the original. Both are deleted
+// when it ends, whatever happened.
+func launch(kind, path, version, sha, dir string, ended func(error)) error {
+	if _, err := hex.DecodeString(sha); err != nil || len(sha) != 64 {
+		return errors.New("the release list gives no usable checksum")
+	}
+	sh := `d=$(/usr/bin/mktemp -d /private/tmp/kinara-update.XXXXXX) || exit 1
+p="$d/Kinara.pkg"
+fail() { /bin/rm -rf "$d"; echo "$1" >&2; exit 1; }
+/bin/cp -X ` + shQuote(path) + ` "$p" || fail "couldn't copy the package"
+/bin/rm -f ` + shQuote(path) + `
+[ "$(/usr/bin/shasum -a 256 "$p" | /usr/bin/cut -d' ' -f1)" = "` + strings.ToLower(sha) + `" ] || fail "the package changed after it was downloaded"
+/usr/sbin/pkgutil --check-signature "$p" | /usr/bin/grep -qF "Developer ID Installer: Macroboom LLC (` + teamID + `)" || fail "the package isn't signed by Macroboom LLC"
+/usr/sbin/spctl --assess --type install "$p" || fail "macOS doesn't accept the package"
+/usr/sbin/installer -pkg "$p" -target /
+rc=$?
+/bin/rm -rf "$d"
+exit $rc`
+	script := fmt.Sprintf(`do shell script %s with prompt %s with administrator privileges`,
+		appleString(sh), appleString("Kinara is updating to version "+version+"."))
 	cmd := exec.Command("/usr/bin/osascript", "-e", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	var out strings.Builder
@@ -68,7 +89,12 @@ do shell script "/usr/sbin/installer -pkg " & quoted form of p & " -target / ; r
 	return nil
 }
 
+// shQuote quotes s for the shell.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 // appleString quotes s as an AppleScript string.
 func appleString(s string) string {
-	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`).Replace(s) + `"`
 }

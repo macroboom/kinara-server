@@ -493,6 +493,11 @@ func (x *Extractor) readDVD(j *job, dir, path string, index int, codec string) e
 		_, _ = io.Copy(io.Discard, out)
 	}
 	listErr := lister.Wait()
+	// Whatever ffprobe left unread (it can stop before the end), so ffmpeg
+	// finishes instead of waiting on a full pipe until the two-hour limit,
+	// holding one of the two reading slots: every other picture subtitle
+	// track would queue behind it.
+	_, _ = io.Copy(io.Discard, pipe)
 	copyErr := copier.Wait()
 	if decodeErr != nil {
 		return decodeErr

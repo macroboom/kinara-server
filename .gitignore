@@ -34,3 +34,6 @@ Thumbs.db
 # Keys built into release builds: never committed
 packaging/*/tmdb.key
 packaging/*/opensubtitles.key
+packaging/*/subdl.key
+
+*.key

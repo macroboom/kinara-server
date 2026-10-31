@@ -123,6 +123,8 @@ type Server struct {
 	dl          downloadsState
 	// opt remembers the optimized versions each rule made (optimize.go).
 	opt optimizeState
+	// auto runs automatic subtitles (autosubs.go).
+	auto autoSubsState
 
 	limiter *auth.Limiter
 	// tunnelLimiter counts failed sign-ins from all remote devices
@@ -449,8 +451,21 @@ func (s *Server) logRequest(r *http.Request, sw *statusWriter, start time.Time) 
 		!strings.HasPrefix(r.URL.Path, "/api/v1/hls/session/") && !(sw.status < 400 && routine(r)) {
 		level = slog.LevelInfo
 	}
-	s.Log.Log(r.Context(), level, "request", "method", r.Method, "path", r.URL.Path,
+	s.Log.Log(r.Context(), level, "request", "method", r.Method, "path", loggedPath(r),
 		"status", sw.status, "ms", time.Since(start).Milliseconds())
+}
+
+// loggedPath is the path to log for a request. A route that carries a
+// secret in its path (an incoming hook's token, a Quick Connect code) is
+// logged as its pattern, so the secret stays out of the log files.
+func loggedPath(r *http.Request) string {
+	if strings.Contains(r.Pattern, "{token}") || strings.Contains(r.Pattern, "{code}") {
+		if _, p, ok := strings.Cut(r.Pattern, " "); ok {
+			return p
+		}
+		return r.Pattern
+	}
+	return r.URL.Path
 }
 
 // routine is a request apps and pages repeat every few seconds on their

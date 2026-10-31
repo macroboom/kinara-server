@@ -51,10 +51,12 @@
 // Subtitles (also set in the web manager, under Subtitles):
 //
 //	KINARA_OPENSUBTITLES_KEY  an OpenSubtitles.com API key, used instead of the one built into releases
+//	KINARA_SUBDL_KEY          a SubDL.com API key, used instead of the one built into releases
 //
 // Updates (checking can also be turned off in the web manager, under Updates):
 //
-//	KINARA_UPDATE_URL      the list of releases (default https://dl.kinara.media/server/latest.json;
+//	KINARA_UPDATE_URL      the signed list of releases (default
+//	                       https://dl.kinara.media/server/latest-signed.json; https only;
 //	                       off turns update checks off)
 package main
 
@@ -178,6 +180,11 @@ var builtinTMDBKey string
 // (-X main.builtinOpenSubtitlesKey=<key>). KINARA_OPENSUBTITLES_KEY, or a
 // key the owner enters under Manage, Subtitles, replaces it.
 var builtinOpenSubtitlesKey string
+
+// builtinSubDLKey is Kinara's SubDL.com API key, for automatic subtitles,
+// set by the release build (-X main.builtinSubDLKey=<key>). KINARA_SUBDL_KEY,
+// or the owner's own key under Manage, takes its place.
+var builtinSubDLKey string
 
 func commonFlags(fs *flag.FlagSet, c *config) {
 	fs.StringVar(&c.dataDir, "data", env("KINARA_DATA", "./kinara-data"), "data folder")
@@ -353,6 +360,11 @@ func serveUntil(parent context.Context, args []string) error {
 	// A backup staged for restoring goes in place before the database opens.
 	envFile := os.Getenv("KINARA_ENV_FILE")
 	restored, restoreErr := backup.ApplyPending(c.dataDir, envFile, slog.Default())
+	if errors.Is(restoreErr, backup.ErrRestoreBroken) {
+		// The database isn't where it belongs; opening would make a new,
+		// empty library over it.
+		return restoreErr
+	}
 
 	d, err := open(c)
 	if err != nil {
@@ -413,7 +425,10 @@ func serveUntil(parent context.Context, args []string) error {
 	// New releases: checked twice a day, installed from the manager page
 	// (after a backup).
 	if u := env("KINARA_UPDATE_URL", update.DefaultURL); u != "off" {
-		srv.Updater = &update.Updater{URL: u, Current: version, Dir: c.cache("updates"), Log: d.log, Before: srv.BackupBeforeUpdate}
+		// The installer is downloaded next to the database, not into the
+		// cache (which may be on a shared drive); lockDir keeps it this
+		// account's.
+		srv.Updater = &update.Updater{URL: u, Current: version, Dir: filepath.Join(c.dataDir, "updates"), Log: d.log, Before: srv.BackupBeforeUpdate}
 		go srv.RunUpdates(ctx)
 	}
 	// Readings for the metrics page: every 5 s, the last day in memory.
@@ -453,8 +468,10 @@ func serveUntil(parent context.Context, args []string) error {
 			srv.Jobs = worker
 			d.scanner.OnDone = func(int64) {
 				worker.Kick()
-				// New files in an optimized library get their copies.
+				// New files in an optimized library get their copies, and
+				// automatic subtitles look at them.
 				go srv.OptimizeNewFiles()
+				srv.AutoSubsAfterScan()
 			}
 			go worker.Run(ctx)
 		}
@@ -462,6 +479,11 @@ func serveUntil(parent context.Context, args []string) error {
 	// Subtitles from OpenSubtitles (with Kinara's key, the owner's own, or
 	// KINARA_OPENSUBTITLES_KEY), and how DVD subtitles look.
 	srv.ApplySubtitleSettings(ctx, env("KINARA_OPENSUBTITLES_KEY", builtinOpenSubtitlesKey))
+	srv.SetBuiltinSubDLKey(env("KINARA_SUBDL_KEY", builtinSubDLKey))
+	// Automatic subtitles: found in the profiles' languages and checked
+	// against the speech, in the background.
+	go srv.CheckSubtitleAccount(ctx)
+	go srv.RunAutoSubs(ctx)
 	if secs := env("KINARA_WATCH", "60"); secs != "0" && secs != "off" {
 		every, err := strconv.Atoi(secs)
 		if err != nil || every < 10 {

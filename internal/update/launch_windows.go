@@ -15,8 +15,9 @@ import (
 func canLaunch(kind string) bool { return kind == KindWindows }
 
 // verify has nothing to add on Windows: the installer isn't code signed
-// (yet), so the size and checksum from latest.json, fetched over HTTPS,
-// are the check.
+// (yet), so the size and checksum from the signed release list are the
+// check, made again right before launch, in a folder only this account and
+// administrators can change (lockDir).
 func verify(ctx context.Context, kind, path string) error { return nil }
 
 const (
@@ -32,7 +33,7 @@ const (
 // mode. A server running as the Windows service can start it directly; one
 // running as the signed-in user (sign-in mode) asks Windows for permission,
 // which shows the usual admin prompt on that PC.
-func launch(kind, path, version, dir string, ended func(error)) error {
+func launch(kind, path, version, sha, dir string, ended func(error)) error {
 	args := []string{"/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/AUTOUPDATE=1",
 		"/LOG=" + filepath.Join(dir, "install.log")}
 	cmd := exec.Command(path, args...)

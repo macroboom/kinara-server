@@ -66,13 +66,17 @@ and tray first, and never change a service account set by hand in
 
 ## Updates
 
-The server checks `dl.kinara.media/server/latest.json` twice a day (the
-owner can turn this off under Manage, Updates, or with
-`KINARA_UPDATE_URL=off`). When a newer version is out, the Manage pages
-show it and the tray says so once and adds "Update to Kinara X…".
-**Update** downloads `Kinara-Setup-<version>-x64.exe` into the cache's
-`updates` folder, checks its size and SHA-256 against latest.json, and runs
-it with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /AUTOUPDATE=1` (log:
+The server checks `dl.kinara.media/server/latest-signed.json` twice a day
+(the owner can turn this off under Manage, Updates, or with
+`KINARA_UPDATE_URL=off`). That's the release list signed with Kinara's
+release key; a server only installs from a list whose signature matches the
+key built into it (`internal/update/update-key.pub`). When a newer version
+is out, the Manage pages show it and the tray says so once and adds "Update
+to Kinara X…". **Update** downloads `Kinara-Setup-<version>-x64.exe` into
+the `updates` folder in the data folder, which gets an access list of its
+own (SYSTEM, administrators and the server's account only), checks its size
+and SHA-256 against the signed list, checks it again after the pre-update
+backup, and runs it with `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /AUTOUPDATE=1` (log:
 `updates\install.log`). The service starts it directly; in sign-in mode the
 server asks Windows to run it as administrator, so the UAC prompt shows on
 that PC. The installer keeps the previous folders, mode and tasks, stops

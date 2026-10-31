@@ -7,6 +7,7 @@ package tmdb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -101,7 +102,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
-			return err
+			return withoutURL(err)
 		}
 		req.Header.Set("Accept", "application/json")
 		if bearer {
@@ -109,10 +110,10 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		}
 		resp, err := c.HTTP.Do(req)
 		if err != nil {
-			if attempt < 2 {
+			if attempt < 2 && ctx.Err() == nil {
 				continue
 			}
-			return err
+			return withoutURL(err)
 		}
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		resp.Body.Close()
@@ -487,4 +488,14 @@ func (c *Client) CollectionDetails(ctx context.Context, id int) (Collection, err
 	var out Collection
 	err := c.get(ctx, fmt.Sprintf("/collection/%d", id), nil, &out)
 	return out, err
+}
+
+// withoutURL drops the address from a failed request's error. A v3 key
+// rides in the query string, and these errors reach users and the log.
+func withoutURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("tmdb: couldn't reach TMDB: %w", ue.Err)
+	}
+	return err
 }

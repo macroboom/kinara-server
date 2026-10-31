@@ -415,8 +415,10 @@ var discDirs = map[string]bool{"bdmv": true, "video_ts": true, "certificate": tr
 // returns the IDs of files that haven't changed, so they can be marked as
 // seen in one batch, and the IDs of known files that are now skipped
 // (extras, samples, disc folders), so stale "can't place" records can be
-// removed. A folder that can't be read fails the scan, so an unplugged
-// drive is never taken as "every file deleted".
+// removed. A library folder that can't be read fails the scan, so an
+// unplugged drive is never taken as "every file deleted"; a folder inside
+// it that can't be read keeps its files as they were. Linked folders are
+// followed (walkFollow).
 func (s *Scanner) walk(ctx context.Context, lib store.Library, only string, known map[string]store.Version, jobs chan<- job, subtitles *[]string) (unchanged, dropped []string, err error) {
 	if only != "" {
 		return s.walkFolder(ctx, lib, folderOf(lib, only), only, known, jobs, subtitles)
@@ -452,6 +454,7 @@ func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root, start
 		stable = time.Minute
 	}
 	cutoff := time.Now().Add(-stable).Unix()
+	now := time.Now().Unix()
 	forget := func(dir string) {
 		prefix := dir + string(filepath.Separator)
 		for p, v := range known {
@@ -460,7 +463,18 @@ func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root, start
 			}
 		}
 	}
-	err = filepath.WalkDir(start, func(path string, d fs.DirEntry, err error) error {
+	// keep counts every known file under dir as still there, for a folder
+	// that couldn't be read this time: a passing permission or disk error
+	// shouldn't report a whole season as deleted.
+	keep := func(dir string) {
+		prefix := dir + string(filepath.Separator)
+		for p, v := range known {
+			if strings.HasPrefix(p, prefix) && !v.Missing {
+				unchanged = append(unchanged, v.ID)
+			}
+		}
+	}
+	err = walkFollow(start, func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -469,6 +483,9 @@ func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root, start
 				return fmt.Errorf("library folder %s: %w", start, err)
 			}
 			s.Log.Warn("walk", "path", path, "err", err)
+			if d != nil && d.IsDir() {
+				keep(path)
+			}
 			return nil
 		}
 		name := d.Name()
@@ -512,11 +529,20 @@ func (s *Scanner) walkFolder(ctx context.Context, lib store.Library, root, start
 			return nil
 		}
 
-		if info.ModTime().Unix() > cutoff {
+		// A file changed in the last minute may still be being copied, so
+		// it waits for the next scan. One already in the library stays
+		// there meanwhile (it was just tagged or remuxed, say), so it isn't
+		// reported as removed. A time in the future is a clock that's
+		// ahead (a NAS's, say), not a copy in progress.
+		mtime := info.ModTime().Unix()
+		if mtime > cutoff && mtime <= now {
 			s.update(lib.ID, func(p *Progress) { p.Skipped++ })
-			return nil // still being copied; picked up next scan
+			if v, ok := known[path]; ok {
+				unchanged = append(unchanged, v.ID)
+			}
+			return nil
 		}
-		j := job{path: path, rel: rel, size: info.Size(), mtime: info.ModTime().Unix()}
+		j := job{path: path, rel: rel, size: info.Size(), mtime: mtime}
 		if v, ok := known[path]; ok {
 			if v.Size == j.size && v.Mtime == j.mtime && v.ProbeError == "" {
 				if v.ItemID != "" || s.placeFor(lib, parsed) == "" {

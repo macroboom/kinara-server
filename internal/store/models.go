@@ -150,6 +150,9 @@ type TrackPrefs struct {
 	AudioLang    string `json:"audioLang"`
 	SubtitleLang string `json:"subtitleLang"`
 	SubtitleMode string `json:"subtitleMode"`
+	// Chosen: the subtitle choice was made for this title (not the
+	// profile's default), so players keep to it. Not stored.
+	Chosen bool `json:"chosen,omitempty"`
 }
 
 // Credit is one cast member.

@@ -2,13 +2,16 @@ package update
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -166,5 +169,96 @@ func TestCleanupKeepsLog(t *testing.T) {
 	left, _ := os.ReadDir(dir)
 	if len(left) != 1 || left[0].Name() != "install.log" {
 		t.Fatalf("left %v", left)
+	}
+}
+
+// signedSite serves the release list as latest-signed.json, signed with key.
+func signedSite(t *testing.T, key ed25519.PrivateKey, tamper bool) *httptest.Server {
+	t.Helper()
+	body := []byte("installer")
+	plain, rel := site(t, body, nil)
+	rel.Files["windows-x64"] = File{Name: "Kinara-Setup-9.0.0-x64.exe", URL: plain.URL + "/server/9.0.0/Kinara-Setup-9.0.0-x64.exe",
+		Size: rel.Files["windows-x64"].Size, SHA256: rel.Files["windows-x64"].SHA256}
+	payload, _ := json.Marshal(rel)
+	sig := ed25519.Sign(key, payload)
+	if tamper {
+		payload = []byte(strings.Replace(string(payload), "9.0.0", "9.0.1", 1))
+	}
+	env := Signed{Payload: base64.StdEncoding.EncodeToString(payload), Signature: base64.StdEncoding.EncodeToString(sig)}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(env)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestSignedReleaseList(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	defer func(k ed25519.PublicKey) { publicKey = k }(publicKey)
+	publicKey = pub
+
+	srv := signedSite(t, priv, false)
+	u := &Updater{URL: srv.URL + "/server/latest-signed.json", Current: "0.1.0", Dir: t.TempDir(), Kind: KindWindows}
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := u.Status(); st.Latest != "9.0.0" || !u.signed {
+		t.Fatalf("status %+v signed %v", st, u.signed)
+	}
+
+	bad := signedSite(t, priv, true)
+	u = &Updater{URL: bad.URL + "/latest-signed.json", Current: "0.1.0", Dir: t.TempDir(), Kind: KindWindows}
+	if _, err := u.Check(context.Background()); err == nil {
+		t.Fatal("accepted a changed release list")
+	}
+
+	// A plain list isn't accepted once there's a key.
+	plain, _ := site(t, []byte("installer"), nil)
+	u = &Updater{URL: plain.URL + "/server/latest.json", Current: "0.1.0", Dir: t.TempDir(), Kind: KindWindows}
+	if _, err := u.Check(context.Background()); err == nil {
+		t.Fatal("accepted an unsigned release list")
+	}
+}
+
+// Without a release key built in, an update is shown but not installed.
+func TestNoKeyNoInstall(t *testing.T) {
+	defer func(k ed25519.PublicKey) { publicKey = k }(publicKey)
+	publicKey = nil
+	srv, _ := site(t, []byte("installer"), nil)
+	u := &Updater{URL: srv.URL + "/server/latest.json", Current: "0.1.0", Dir: t.TempDir(), Kind: KindWindows}
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := u.Status(); !st.Available || st.CanInstall {
+		t.Fatalf("status %+v", st)
+	}
+	if err := u.Install(context.Background()); err == nil {
+		t.Fatal("installed without a release key")
+	}
+}
+
+func TestPlainHTTPRefused(t *testing.T) {
+	u := &Updater{URL: "http://dl.kinara.media/server/latest-signed.json", Current: "0.1.0", Dir: t.TempDir()}
+	if _, err := u.Check(context.Background()); err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("err %v", err)
+	}
+	if parseKey("# comment\n\n"+base64.StdEncoding.EncodeToString(make([]byte, 32))+"\n") == nil {
+		t.Fatal("key file not read")
+	}
+	if parseKey(keyFile) != nil && len(parseKey(keyFile)) != ed25519.PublicKeySize {
+		t.Fatal("built-in key unreadable")
+	}
+}
+
+func TestCheckSumAgain(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "x.exe")
+	os.WriteFile(p, []byte("abc"), 0o600)
+	sum := sha256.Sum256([]byte("abc"))
+	if err := checkSum(p, hex.EncodeToString(sum[:])); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(p, []byte("evil"), 0o600)
+	if err := checkSum(p, hex.EncodeToString(sum[:])); err == nil {
+		t.Fatal("a swapped installer passed")
 	}
 }

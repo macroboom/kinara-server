@@ -181,13 +181,19 @@ func ptsBytes(pts int64) []byte {
 
 // writeVobSub writes t.idx and t.sub: three subtitles, the second forced and
 // the third without a stop time.
+type vobSub struct {
+	at, dur float64
+	forced  bool
+}
+
 func writeVobSub(t *testing.T, dir string) string {
 	t.Helper()
-	type sub struct {
-		at, dur float64
-		forced  bool
-	}
-	subs := []sub{{1, 2.5, false}, {4, 1, true}, {7.5, -1, false}}
+	return writeVobSubs(t, dir, []vobSub{{1, 2.5, false}, {4, 1, true}, {7.5, -1, false}})
+}
+
+// writeVobSubs writes t.idx and t.sub with these subtitles.
+func writeVobSubs(t *testing.T, dir string, subs []vobSub) string {
+	t.Helper()
 	var data []byte
 	var idx []string
 	for i, s := range subs {
@@ -203,7 +209,7 @@ func writeVobSub(t *testing.T, dir string) string {
 			pkt = append(pkt, 0)
 		}
 		ms := int(s.at * 1000)
-		idx = append(idx, fmt.Sprintf("timestamp: 00:00:%02d:%03d, filepos: %09x", ms/1000, ms%1000, len(data)))
+		idx = append(idx, fmt.Sprintf("timestamp: %02d:%02d:%02d:%03d, filepos: %09x", ms/3600000, ms/60000%60, ms/1000%60, ms%1000, len(data)))
 		data = append(data, pkt...)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "t.sub"), data, 0o644); err != nil {

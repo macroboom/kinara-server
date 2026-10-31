@@ -16,6 +16,7 @@
 # Secrets (Settings > Secrets and variables > Actions), see packaging/linux/README.md:
 #   TMDB_KEY          Kinara's TMDB key, built into the server
 #   OPENSUBTITLES_KEY Kinara's OpenSubtitles.com API key, built in (optional)
+#   SUBDL_KEY         Kinara's SubDL.com API key, built in (optional)
 #   WEB_REPO_TOKEN    read access to the private kinara-web repository
 #   GPG_PRIVATE_KEY   the APT signing key (armored), and GPG_PASSPHRASE
 #   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET
@@ -103,6 +104,7 @@ jobs:
         env:
           KINARA_TMDB_KEY: ${{ secrets.TMDB_KEY }}
           KINARA_OPENSUBTITLES_KEY: ${{ secrets.OPENSUBTITLES_KEY }}
+          KINARA_SUBDL_KEY: ${{ secrets.SUBDL_KEY }}
           WEB_REPO: ${{ github.workspace }}/kinara-web
         run: |
           if [ "$PUBLISH" = true ]; then export VERSION="${GITHUB_REF_NAME#v}"; fi
@@ -178,6 +180,7 @@ jobs:
         env:
           KINARA_TMDB_KEY: ${{ secrets.TMDB_KEY }}
           KINARA_OPENSUBTITLES_KEY: ${{ secrets.OPENSUBTITLES_KEY }}
+          KINARA_SUBDL_KEY: ${{ secrets.SUBDL_KEY }}
         run: |
           $version = if ($env:PUBLISH -eq 'true') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '' }
           ./packaging/windows/build.ps1 -Version $version -WebRepo '..\..\kinara-web'
@@ -248,6 +251,7 @@ jobs:
         env:
           KINARA_TMDB_KEY: ${{ secrets.TMDB_KEY }}
           KINARA_OPENSUBTITLES_KEY: ${{ secrets.OPENSUBTITLES_KEY }}
+          KINARA_SUBDL_KEY: ${{ secrets.SUBDL_KEY }}
           WEB_REPO: ${{ github.workspace }}/kinara-web
         run: |
           if [ "$PUBLISH" = true ]; then export VERSION="${GITHUB_REF_NAME#v}"; fi
@@ -389,6 +393,7 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_DOWNLOADS_BUCKET: ${{ secrets.R2_DOWNLOADS_BUCKET }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           ls -l out
           bash packaging/publish-downloads.sh "$GITHUB_REF_NAME" out/*.exe out/*.pkg out/*.deb

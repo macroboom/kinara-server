@@ -6,9 +6,22 @@
 //	{ "version": "0.2.0", "date": "2026-10-20", "notes": "https://...",
 //	  "files": { "windows-x64": { "name", "url", "latest", "size", "sha256" }, ... } }
 //
+// The server reads latest-signed.json, the same list with an Ed25519
+// signature, so the list (and so each installer's checksum) is known to
+// come from Kinara's release key, not just from whoever controls the
+// downloads site:
+//
+//	{ "payload": "<latest.json, base64>", "signature": "<base64>" }
+//
+// The public half of the key is update-key.pub in this folder, built into
+// the server. A build without one can check for updates but not install
+// them.
+//
 // Installing downloads the installer for this computer into the updates
-// folder, checks its size and SHA-256 against latest.json (and, on macOS,
-// that Macroboom LLC signed it and Apple notarized it), then starts it:
+// folder (which only this account and administrators can change), checks
+// its size and SHA-256 against the signed list (and, on macOS, that
+// Macroboom LLC signed it and Apple notarized it), checks it again right
+// before starting it, then starts it:
 // silently on Windows (the Kinara installer stops the server and starts the
 // new one), with macOS's own password prompt on a Mac. The new server
 // empties the updates folder when it starts, so no installer is left behind.
@@ -19,13 +32,17 @@ package update
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	_ "embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,8 +54,41 @@ import (
 	"time"
 )
 
-// DefaultURL is where releases are listed.
-const DefaultURL = "https://dl.kinara.media/server/latest.json"
+// DefaultURL is where releases are listed, signed.
+const DefaultURL = "https://dl.kinara.media/server/latest-signed.json"
+
+//go:embed update-key.pub
+var keyFile string
+
+// publicKey checks the release list's signature (nil: this build has no
+// key, so it can't install updates). A variable for tests.
+var publicKey = parseKey(keyFile)
+
+// parseKey reads update-key.pub: the raw 32-byte Ed25519 public key in
+// base64, on the first line that isn't a # comment.
+func parseKey(s string) ed25519.PublicKey {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		b, err := base64.StdEncoding.DecodeString(line)
+		if err != nil || len(b) != ed25519.PublicKeySize {
+			return nil
+		}
+		return ed25519.PublicKey(b)
+	}
+	return nil
+}
+
+// errNoKey is installing from a build with no release key.
+var errNoKey = errors.New("this build of Kinara has no release key, so it can't check that an update is genuine")
+
+// Signed is latest-signed.json.
+type Signed struct {
+	Payload   string `json:"payload"`
+	Signature string `json:"signature"`
+}
 
 // maxInstaller caps a download: a bigger file is not one of ours.
 const maxInstaller = 1 << 30
@@ -119,8 +169,10 @@ type Updater struct {
 	// it fails the update still goes ahead; the failure is logged.
 	Before func(ctx context.Context) error
 
-	mu        sync.Mutex
-	release   *Release
+	mu      sync.Mutex
+	release *Release
+	// signed is whether release came with a good signature.
+	signed    bool
 	checkedAt time.Time
 	checkErr  string
 	state     string
@@ -191,7 +243,7 @@ func (u *Updater) Status() Status {
 		st.Latest, st.Date, st.Notes = r.Version, r.Date, r.Notes
 		st.Available = Newer(r.Version, u.Current)
 		_, has := r.Files[fileKey(k)]
-		st.CanInstall = st.Available && has && canLaunch(k) && !isDev(u.Current)
+		st.CanInstall = st.Available && has && canLaunch(k) && !isDev(u.Current) && u.signed
 	}
 	if !st.CanInstall {
 		st.How = how(k)
@@ -204,14 +256,14 @@ func (u *Updater) Status() Status {
 
 // Check reads latest.json. It returns the release (nil on error).
 func (u *Updater) Check(ctx context.Context) (*Release, error) {
-	r, err := u.fetch(ctx)
+	r, signed, err := u.fetch(ctx)
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if err != nil {
 		u.checkErr = "Couldn't check for updates: " + err.Error()
 		return nil, err
 	}
-	u.release, u.checkErr, u.checkedAt = r, "", time.Now()
+	u.release, u.signed, u.checkErr, u.checkedAt = r, signed, "", time.Now()
 	return r, nil
 }
 
@@ -222,30 +274,77 @@ func (u *Updater) manifestURL() string {
 	return DefaultURL
 }
 
-func (u *Updater) fetch(ctx context.Context) (*Release, error) {
+// fetch reads the release list. With a release key built in, the list must
+// be signed by it; without one, a signed or plain list is read but signed
+// is false (it can be shown, not installed).
+func (u *Updater) fetch(ctx context.Context) (r *Release, signed bool, err error) {
+	if err := secureURL(u.manifestURL()); err != nil {
+		return nil, false, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.manifestURL(), nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req.Header.Set("User-Agent", "kinara-server/"+u.Current+" ("+runtime.GOOS+"; "+runtime.GOARCH+")")
 	resp, err := u.client().Do(req)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("the downloads site answered %s", resp.Status)
+		return nil, false, fmt.Errorf("the downloads site answered %s", resp.Status)
 	}
-	var r Release
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&r); err != nil {
-		return nil, fmt.Errorf("unreadable release list: %w", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, false, err
 	}
-	if _, ok := parse(r.Version); !ok {
-		return nil, fmt.Errorf("unreadable version %q in the release list", r.Version)
+	payload := body
+	var env Signed
+	if json.Unmarshal(body, &env) == nil && env.Payload != "" {
+		p, perr := base64.StdEncoding.DecodeString(env.Payload)
+		sig, serr := base64.StdEncoding.DecodeString(env.Signature)
+		if perr != nil || serr != nil {
+			return nil, false, errors.New("unreadable signed release list")
+		}
+		payload = p
+		signed = publicKey != nil && ed25519.Verify(publicKey, p, sig)
+		if publicKey != nil && !signed {
+			return nil, false, errors.New("the release list's signature doesn't match Kinara's release key")
+		}
+	} else if publicKey != nil {
+		return nil, false, errors.New("the release list isn't signed")
 	}
-	return &r, nil
+	var rel Release
+	if err := json.Unmarshal(payload, &rel); err != nil {
+		return nil, false, fmt.Errorf("unreadable release list: %w", err)
+	}
+	if _, ok := parse(rel.Version); !ok {
+		return nil, false, fmt.Errorf("unreadable version %q in the release list", rel.Version)
+	}
+	return &rel, signed, nil
+}
+
+// secureURL refuses a plain http address, except on this computer (tests,
+// a local mirror).
+func secureURL(raw string) error {
+	p, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if p.Scheme == "https" || (p.Scheme == "http" && loopback(p.Hostname())) {
+		return nil
+	}
+	return fmt.Errorf("updates are only fetched over https, not from %s", raw)
+}
+
+func loopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // ErrBusy means an install is already under way.
@@ -271,6 +370,13 @@ func (u *Updater) Install(ctx context.Context) error {
 		u.mu.Unlock()
 		return errors.New("this copy of Kinara can't update itself: " + how(k))
 	}
+	if !u.signed {
+		u.mu.Unlock()
+		if publicKey == nil {
+			return fmt.Errorf("%w: %s", errNoKey, how(k))
+		}
+		return errors.New("the release list isn't signed, so the update wasn't installed")
+	}
 	if err := u.checkFile(f); err != nil {
 		u.mu.Unlock()
 		return err
@@ -291,8 +397,13 @@ func (u *Updater) Install(ctx context.Context) error {
 					u.log().Warn("update: before installing", "err", berr)
 				}
 			}
+			// The backup can take a while: check the file is still the
+			// one downloaded.
+			err = checkSum(path, f.SHA256)
+		}
+		if err == nil {
 			u.log().Info("update: starting the installer", "version", r.Version, "file", path)
-			err = launch(k, path, r.Version, u.Dir, func(err error) {
+			err = launch(k, path, r.Version, f.SHA256, u.Dir, func(err error) {
 				// The installer ended and we're still running: it failed or
 				// was cancelled before it stopped the server.
 				_ = os.Remove(path)
@@ -326,7 +437,7 @@ func (u *Updater) checkFile(f File) error {
 		return err
 	}
 	dl, err := url.Parse(f.URL)
-	if err != nil || dl.Host != base.Host || (dl.Scheme != "https" && dl.Scheme != base.Scheme) {
+	if err != nil || dl.Host != base.Host || secureURL(f.URL) != nil {
 		return fmt.Errorf("the release list points somewhere unexpected: %s", f.URL)
 	}
 	if f.Size <= 0 || f.Size > maxInstaller {
@@ -344,8 +455,13 @@ func (u *Updater) checkFile(f File) error {
 
 // download fetches the installer into Dir, checking its size and SHA-256.
 func (u *Updater) download(ctx context.Context, f File) (string, error) {
-	if err := os.MkdirAll(u.Dir, 0o755); err != nil {
+	if err := os.MkdirAll(u.Dir, 0o700); err != nil {
 		return "", err
+	}
+	// Other accounts on this computer mustn't be able to swap the
+	// installer before it runs (as an administrator).
+	if err := lockDir(u.Dir); err != nil {
+		return "", fmt.Errorf("couldn't protect the updates folder: %w", err)
 	}
 	final := filepath.Join(u.Dir, f.Name)
 	part := final + ".part"
@@ -414,6 +530,23 @@ func (u *Updater) download(ctx context.Context, f File) (string, error) {
 		return "", err
 	}
 	return final, nil
+}
+
+// checkSum checks a downloaded installer against its SHA-256 again.
+func checkSum(path, want string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	if !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), want) {
+		return errors.New("the installer changed after it was downloaded, so it wasn't installed")
+	}
+	return nil
 }
 
 // Cleanup empties the updates folder: installers and partial downloads

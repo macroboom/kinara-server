@@ -882,6 +882,10 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, u store.User) {
 		return
 	}
 	step("found in database")
+	if rg := r.Header.Get("Range"); rg == "" || strings.HasPrefix(rg, "bytes=0-") {
+		// Someone started watching: subtitles for it come first.
+		s.autoSubsPlaying(s.sourceVersionID(r.Context(), r.PathValue("id")))
+	}
 	if rg := r.Header.Get("Range"); s.Jobs != nil && !strings.HasPrefix(v.ID, optimizedPrefix) && (rg == "" || strings.HasPrefix(rg, "bytes=0-")) {
 		// Someone started watching: make its preview thumbnails next.
 		s.Jobs.Prioritize(v.ID)

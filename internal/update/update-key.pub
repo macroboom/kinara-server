@@ -1,0 +1,5 @@
+# Kinara's release key: the public half of the Ed25519 key that signs
+# latest-signed.json (packaging/publish-downloads.sh). One line of base64,
+# the raw 32-byte public key. A server built while this has no key can't
+# install updates itself. To make the key pair (once), see
+# packaging/publish-downloads.sh.
