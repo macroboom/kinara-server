@@ -4,6 +4,8 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -21,9 +23,14 @@ import (
 
 func TestUpdateEndpoints(t *testing.T) {
 	ctx := context.Background()
+	// The release list, signed with a key of the test's own, so it doesn't
+	// matter whether this build has Kinara's real release key in it.
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	payload, _ := json.Marshal(update.Release{Version: "9.1.0", Date: "2026-10-20", Notes: "https://example.com/notes",
+		Files: map[string]update.File{"linux-amd64-deb": {Name: "k.deb", URL: "http://x/k.deb", Size: 1, SHA256: "00"}}})
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(update.Release{Version: "9.1.0", Date: "2026-10-20", Notes: "https://example.com/notes",
-			Files: map[string]update.File{"linux-amd64-deb": {Name: "k.deb", URL: "http://x/k.deb", Size: 1, SHA256: "00"}}})
+		json.NewEncoder(w).Encode(update.Signed{Payload: base64.StdEncoding.EncodeToString(payload),
+			Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(priv, payload))})
 	}))
 	defer site.Close()
 
@@ -39,7 +46,7 @@ func TestUpdateEndpoints(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := &Server{Store: st, Images: images.New(filepath.Join(dir, "img")), Watch: &watch.Service{Store: st}, Log: log,
 		Version: "0.3.0", BaseCtx: ctx,
-		Updater: &update.Updater{URL: site.URL, Current: "0.3.0", Dir: filepath.Join(dir, "updates"), Kind: update.KindDeb}}
+		Updater: &update.Updater{URL: site.URL, Current: "0.3.0", Dir: filepath.Join(dir, "updates"), Kind: update.KindDeb, Key: pub}}
 	hs := httptest.NewServer(srv.Handler())
 	defer hs.Close()
 	signIn := func(name string) *client {

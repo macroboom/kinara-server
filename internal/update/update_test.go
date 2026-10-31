@@ -43,6 +43,16 @@ func TestNewer(t *testing.T) {
 	}
 }
 
+// withoutKey runs a test as a build with no release key, which accepts a
+// plain (unsigned) release list: for tests of everything but signing, so
+// they pass whether or not update-key.pub has the real key in it.
+func withoutKey(t *testing.T) {
+	t.Helper()
+	saved := publicKey
+	publicKey = nil
+	t.Cleanup(func() { publicKey = saved })
+}
+
 func site(t *testing.T, body []byte, mutate func(*Release)) (*httptest.Server, *Release) {
 	t.Helper()
 	sum := sha256.Sum256(body)
@@ -70,6 +80,7 @@ func site(t *testing.T, body []byte, mutate func(*Release)) (*httptest.Server, *
 }
 
 func TestCheckAndStatus(t *testing.T) {
+	withoutKey(t)
 	srv, _ := site(t, []byte("installer"), nil)
 	u := &Updater{URL: srv.URL + "/server/latest.json", Current: "0.1.0", Dir: t.TempDir(), Kind: KindDeb}
 	if _, err := u.Check(context.Background()); err != nil {
@@ -105,6 +116,7 @@ func TestCheckError(t *testing.T) {
 }
 
 func TestDownloadChecksum(t *testing.T) {
+	withoutKey(t)
 	body := []byte("the real installer")
 	srv, rel := site(t, body, nil)
 	dir := t.TempDir()
@@ -251,6 +263,7 @@ func TestPlainHTTPRefused(t *testing.T) {
 }
 
 func TestCheckSumAgain(t *testing.T) {
+	withoutKey(t)
 	p := filepath.Join(t.TempDir(), "x.exe")
 	os.WriteFile(p, []byte("abc"), 0o600)
 	sum := sha256.Sum256([]byte("abc"))

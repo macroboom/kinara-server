@@ -487,6 +487,10 @@ func ApplyPending(dataDir, envFile string, log *slog.Logger) (*Manifest, error) 
 		os.RemoveAll(in)
 		return nil, errors.New("the backup has no database")
 	}
+	// Everything is unpacked: close the staged zip now, since Windows can't
+	// remove or rename a file that's still open (below, once it's applied
+	// or set aside as failed). The deferred Close is then a no-op.
+	zr.Close()
 
 	// Move the current files aside. The -wal and -shm files go too: left
 	// behind, SQLite would apply them to the restored database.

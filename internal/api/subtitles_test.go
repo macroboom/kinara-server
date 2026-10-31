@@ -95,7 +95,11 @@ func TestSubtitleFilesAndDownloads(t *testing.T) {
 	if ext.Index < ExternalSubtitleBase || ext.Language != "eng" || ext.Source != "sidecar" || ext.Removable {
 		t.Fatalf("sidecar %+v", ext)
 	}
-	if _, err := exec.LookPath("ffmpeg"); err == nil {
+	// Turning subtitles into WebVTT (sidecars and downloads alike) runs
+	// ffmpeg; without it (the Windows CI runner) those parts are skipped.
+	_, noFFmpeg := exec.LookPath("ffmpeg")
+	haveFFmpeg := noFFmpeg == nil
+	if haveFFmpeg {
 		resp, err := http.Get(hs.URL + ext.URL + "?token=" + sam.token)
 		if err != nil {
 			t.Fatal(err)
@@ -116,24 +120,30 @@ func TestSubtitleFilesAndDownloads(t *testing.T) {
 		t.Fatalf("results %+v", found.Results)
 	}
 	var got ExternalSubtitle
-	if resp := sam.do("POST", "/subtitles/"+v.ID+"/download", map[string]any{"fileId": 77, "language": "spa", "release": "Heat.1995.1080p"}, &got); resp.StatusCode != http.StatusCreated {
-		t.Fatalf("download %d", resp.StatusCode)
+	if haveFFmpeg {
+		if resp := sam.do("POST", "/subtitles/"+v.ID+"/download", map[string]any{"fileId": 77, "language": "spa", "release": "Heat.1995.1080p"}, &got); resp.StatusCode != http.StatusCreated {
+			t.Fatalf("download %d", resp.StatusCode)
+		}
+		if got.Source != "download" || got.Language != "spa" || !got.Removable || got.Title != "Heat.1995.1080p" {
+			t.Fatalf("downloaded %+v", got)
+		}
+		// The same file again: no second download.
+		sam.do("POST", "/subtitles/"+v.ID+"/download", map[string]any{"fileId": 77, "language": "spa"}, &got)
+		if downloads != 1 {
+			t.Fatalf("downloaded %d times", downloads)
+		}
+	} else {
+		t.Log("ffmpeg isn't installed: skipping the download checks")
 	}
-	if got.Source != "download" || got.Language != "spa" || !got.Removable || got.Title != "Heat.1995.1080p" {
-		t.Fatalf("downloaded %+v", got)
-	}
-	// The same file again: no second download.
-	sam.do("POST", "/subtitles/"+v.ID+"/download", map[string]any{"fileId": 77, "language": "spa"}, &got)
-	if downloads != 1 {
-		t.Fatalf("downloaded %d times", downloads)
-	}
-	// Someone else can't remove it; sidecars can't be removed at all.
+	// Sidecars can't be removed at all; someone else can't remove a download.
 	if resp := signIn("alex").do("DELETE", "/subtitles/"+v.ID+"/files/"+strconv.Itoa(ext.Index), nil, nil); resp.StatusCode != http.StatusConflict {
 		t.Fatalf("delete sidecar %d", resp.StatusCode)
 	}
 	st.CreateUser(ctx, "kim", hash, false)
-	if resp := signIn("kim").do("DELETE", "/subtitles/"+v.ID+"/files/"+strconv.Itoa(got.Index), nil, nil); resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("delete by another %d", resp.StatusCode)
+	if haveFFmpeg {
+		if resp := signIn("kim").do("DELETE", "/subtitles/"+v.ID+"/files/"+strconv.Itoa(got.Index), nil, nil); resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("delete by another %d", resp.StatusCode)
+		}
 	}
 
 	// Settings: the password never comes back; turning downloads off for
@@ -150,7 +160,9 @@ func TestSubtitleFilesAndDownloads(t *testing.T) {
 	if resp := sam.do("GET", "/subtitles/"+v.ID+"/search", nil, nil); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("search when off %d", resp.StatusCode)
 	}
-	if resp := sam.do("DELETE", "/subtitles/"+v.ID+"/files/"+strconv.Itoa(got.Index), nil, nil); resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("delete own %d", resp.StatusCode)
+	if haveFFmpeg {
+		if resp := sam.do("DELETE", "/subtitles/"+v.ID+"/files/"+strconv.Itoa(got.Index), nil, nil); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("delete own %d", resp.StatusCode)
+		}
 	}
 }
