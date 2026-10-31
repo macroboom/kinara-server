@@ -59,3 +59,4 @@ strip = true
 # both changes). See each copy's KINARA_PATCH.md.
 [patch.crates-io]
 netdev = { path = "patches/netdev" }
+netwatch = { path = "patches/netwatch" }
