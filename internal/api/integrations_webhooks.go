@@ -290,6 +290,10 @@ func (s *Server) createWebhook(w http.ResponseWriter, r *http.Request, u store.U
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := checkWebhookFrom(r, h.URL); err != nil {
+		writeErr(w, http.StatusForbidden, err.Error())
+		return
+	}
 	if err := s.Store.CreateWebhook(r.Context(), &h); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -333,6 +337,10 @@ func (s *Server) updateWebhook(w http.ResponseWriter, r *http.Request, u store.U
 	}
 	if err := in.apply(&h); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := checkWebhookFrom(r, h.URL); err != nil {
+		writeErr(w, http.StatusForbidden, err.Error())
 		return
 	}
 	if err := s.Store.UpdateWebhook(r.Context(), h); err != nil {
@@ -391,6 +399,12 @@ func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request, u store.Use
 // sendNow sends a delivery straight away (a test, or sending one again) and
 // answers with the logged result.
 func (s *Server) sendNow(w http.ResponseWriter, r *http.Request, h store.Webhook, id, event string, body []byte) {
+	// The answer is shown to whoever asked: not one from the home network
+	// to someone on the internet.
+	if err := checkWebhookFrom(r, h.URL); err != nil {
+		writeErr(w, http.StatusForbidden, err.Error())
+		return
+	}
 	a := s.post(r.Context(), h, id, event, body, 1)
 	if err := s.Store.AddAttempt(r.Context(), &a); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())

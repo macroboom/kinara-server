@@ -37,12 +37,19 @@ func (s *Server) quickStart(w http.ResponseWriter, r *http.Request) {
 	}
 	// Every start counts: a TV gets a new code every 10 minutes or when
 	// asked, far below this.
-	key := "start:" + clientIP(r)
-	if err := s.quickStarts.Allow(key); err != nil {
+	// Everything from the internet also shares one allowance: through the
+	// tunnel a new "address" (node ID) costs nothing, and the codes waiting
+	// at once are capped (quick.MaxPending), so outsiders mustn't be able
+	// to use them all up and leave the TVs at home without one.
+	keys := []string{auth.Key("start:", clientIP(r))}
+	if fromInternet(r) {
+		keys = append(keys, "start:internet")
+	}
+	if err := s.quickStarts.Allow(keys...); err != nil {
 		writeErr(w, http.StatusTooManyRequests, "too many sign-in codes asked for; wait a few minutes")
 		return
 	}
-	s.quickStarts.Fail(key)
+	s.quickStarts.Fail(keys...)
 	name := strings.TrimSpace(sessionDeviceName(req.DeviceName, req.Device))
 	if name == "" {
 		name = "A TV"

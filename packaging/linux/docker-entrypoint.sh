@@ -29,6 +29,9 @@ groups="$gid"
 for dev in /dev/dri/renderD* /dev/dri/card* /dev/nvidia*; do
   [ -e "$dev" ] || continue
   g="$(stat -c '%g' "$dev")"
+  # root's group (NVIDIA's devices are usually root:root, and open to all
+  # anyway) would give the server far more than the device.
+  [ "$g" = 0 ] && continue
   case ",$groups," in *",$g,"*) ;; *) groups="$groups,$g" ;; esac
 done
 

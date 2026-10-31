@@ -130,6 +130,12 @@ func (s *Store) ResetMatch(ctx context.Context, id string) error {
 	return err
 }
 
+// DeleteExternalID forgets an item's ID at one provider.
+func (s *Store) DeleteExternalID(ctx context.Context, itemID, provider string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM external_ids WHERE item_id = ? AND provider = ?`, itemID, provider)
+	return err
+}
+
 func (s *Store) SetExternalID(ctx context.Context, itemID, provider, value string) error {
 	_, err := s.db.ExecContext(ctx, qSetExternalID, itemID, provider, value)
 	return err
@@ -411,6 +417,26 @@ func (s *Store) MergeItem(ctx context.Context, fromID, intoID string) error {
 	return tx.Commit()
 }
 
+// mergeExtras copy an item's lists, choices, artwork, genres and franchise
+// to the item it's merged into; each takes (into, from).
+var mergeExtras = []string{
+	`UPDATE watch_state AS w SET position_sec = f.position_sec, completed = MAX(w.completed, f.completed),
+		play_count = MAX(w.play_count, f.play_count), last_played_at = f.last_played_at, client_time = f.client_time
+		FROM watch_state AS f
+		WHERE w.item_id = ?1 AND f.item_id = ?2 AND f.profile_id = w.profile_id AND f.last_played_at > w.last_played_at`,
+	`INSERT OR IGNORE INTO list_items (list_id, item_id, added_at) SELECT list_id, ?1, added_at FROM list_items WHERE item_id = ?2`,
+	`INSERT OR IGNORE INTO show_prefs (profile_id, item_id, audio_lang, subtitle_lang, subtitle_mode, updated_at)
+		SELECT profile_id, ?1, audio_lang, subtitle_lang, subtitle_mode, updated_at FROM show_prefs WHERE item_id = ?2`,
+	`INSERT OR IGNORE INTO images (item_id, kind, url) SELECT ?1, kind, url FROM images WHERE item_id = ?2`,
+	`INSERT OR IGNORE INTO item_genres (item_id, genre) SELECT ?1, genre FROM item_genres WHERE item_id = ?2`,
+	`INSERT OR IGNORE INTO item_collections (item_id, collection_id) SELECT ?1, collection_id FROM item_collections WHERE item_id = ?2`,
+}
+
+// qMergeCredits copies the cast only when the item that stays has none.
+const qMergeCredits = `INSERT OR IGNORE INTO credits (item_id, ord, name, role, photo_url)
+	SELECT ?1, ord, name, role, photo_url FROM credits WHERE item_id = ?2
+	AND NOT EXISTS (SELECT 1 FROM credits WHERE item_id = ?3)`
+
 func mergeTx(ctx context.Context, tx *sql.Tx, fromID, intoID string) error {
 	t := now()
 	if _, err := tx.ExecContext(ctx, qMoveVersions, intoID, fromID); err != nil {
@@ -420,6 +446,17 @@ func mergeTx(ctx context.Context, tx *sql.Tx, fromID, intoID string) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, qCopyExternalIDs, intoID, fromID); err != nil {
+		return err
+	}
+	// What hangs off the item would go with it (ON DELETE CASCADE): keep it
+	// on the one that stays. Where both have something, the one that stays
+	// wins, except watch progress, where the more recently watched wins.
+	for _, q := range mergeExtras {
+		if _, err := tx.ExecContext(ctx, q, intoID, fromID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, qMergeCredits, intoID, fromID, intoID); err != nil {
 		return err
 	}
 
@@ -471,8 +508,12 @@ func (s *Store) DeleteEmptyItems(ctx context.Context, libraryID int64) error {
 			return err
 		}
 	}
-	return nil
+	// Franchises whose last movie went.
+	_, err := s.db.ExecContext(ctx, qDeleteEmptyCollections)
+	return err
 }
+
+const qDeleteEmptyCollections = `DELETE FROM collections WHERE id NOT IN (SELECT collection_id FROM item_collections)`
 
 func nullFloat(f float64) any {
 	if f == 0 {

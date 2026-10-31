@@ -73,6 +73,9 @@ const pendingBuffer = 1024
 func (s *Server) integrationRoutes(mux *http.ServeMux) {
 	s.integ.wake = make(chan struct{}, 1)
 	s.integ.pending = make(chan store.QueuedDelivery, pendingBuffer)
+	// Old delivery logs and expired statuses go even on a server with no
+	// webhook (incoming hooks and status keys write them too).
+	go s.pruneIntegrations()
 
 	mux.Handle("GET /api/v1/integrations/events", s.admin(s.integrationEvents))
 
@@ -364,4 +367,21 @@ var scopeCatalogue = []scopeDef{
 // integrationEvents lists every event and API key scope, for the manager.
 func (s *Server) integrationEvents(w http.ResponseWriter, r *http.Request, u store.User) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": eventCatalogue, "scopes": scopeCatalogue})
+}
+
+// pruneIntegrations forgets old delivery attempts and expired statuses
+// every hour, whether or not the delivery worker runs.
+func (s *Server) pruneIntegrations() {
+	ctx := s.baseCtx()
+	tick := time.NewTicker(time.Hour)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			_ = s.Store.PruneAttempts(ctx, time.Now().Add(-keepDeliveries).Unix())
+			_ = s.Store.PruneStatuses(ctx)
+		}
+	}
 }

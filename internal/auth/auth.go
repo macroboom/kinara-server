@@ -102,7 +102,14 @@ type Limiter struct {
 
 	mu    sync.Mutex
 	fails map[string][]time.Time
+	swept time.Time
 }
+
+// Keys come partly from whoever is asking (a user name, an address), so
+// the map is kept small: stale keys are swept now and then, and past
+// maxKeys some are dropped. Dropping only forgets failures, which at that
+// size are mostly someone else's junk.
+const maxKeys = 20000
 
 var ErrTooManyAttempts = errors.New("too many failed attempts, try again later")
 
@@ -145,9 +152,41 @@ func (l *Limiter) Fail(keys ...string) {
 		l.fails = map[string][]time.Time{}
 	}
 	now := time.Now()
+	if now.Sub(l.swept) > l.Window || len(l.fails) >= maxKeys {
+		for k := range l.fails {
+			l.prune(k, now)
+		}
+		l.swept = now
+		for k := range l.fails {
+			if len(l.fails) < maxKeys {
+				break
+			}
+			delete(l.fails, k)
+		}
+	}
 	for _, k := range keys {
+		// A key's list never needs more than Max entries to say "no".
+		if f := l.fails[k]; len(f) >= l.Max && l.Max > 0 {
+			l.fails[k] = append(f[1:], now)
+			continue
+		}
 		l.fails[k] = append(l.fails[k], now)
 	}
+}
+
+// Len is how many keys the limiter holds.
+func (l *Limiter) Len() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.fails)
+}
+
+// Key shortens attacker-chosen text for a limiter key.
+func Key(prefix, s string) string {
+	if len(s) > 64 {
+		s = s[:64]
+	}
+	return prefix + s
 }
 
 // Reset clears failures for keys after a successful login.

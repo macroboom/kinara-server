@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -89,7 +90,9 @@ var (
 	reBracket = regexp.MustCompile(`\[[^\]]*\]|\{[^}]*\}`)
 
 	// S01E02, S1E2, s01.e02, S01EP02, S01E01E02, S01E01-E02, S01E01-02
-	reSxE = regexp.MustCompile(`(?i)\bs(\d{1,3}) ?e(?:p ?)?(\d{1,3})(?: ?-? ?e?(\d{1,3}))?\b`)
+	// The second number needs an E or a dash right before it: "S01E01 - 10
+	// Years" is one episode called "10 Years".
+	reSxE = regexp.MustCompile(`(?i)\bs(\d{1,3}) ?e(?:p ?)?(\d{1,3})(?:(?: ?- ?)?e(\d{1,3})|-(\d{1,3}))?\b`)
 	// S03E051080p, S04E01BluRay: no separator after the episode number.
 	reSxEGlued = regexp.MustCompile(`(?i)\bs(\d{1,2}) ?e(\d{2})(?:\d{3,4}[pi]|[a-z])`)
 	// S01X02
@@ -336,9 +339,13 @@ func findEpisode(w string) (episodeMatch, bool) {
 		e := episodeMatch{season: atoi(w[m[2]:m[3]]), episode: atoi(w[m[4]:m[5]]),
 			seasonDigits: m[3] - m[2], start: m[0]}
 		e.episodeEnd = e.episode
-		if m[6] >= 0 {
-			if end := atoi(w[m[6]:m[7]]); end > e.episode {
-				e.episodeEnd = end
+		for _, g := range [][2]int{{m[6], m[7]}, {m[8], m[9]}} {
+			// A file holds a few episodes, not dozens: a bigger span is
+			// something else in the name.
+			if g[0] >= 0 {
+				if end := atoi(w[g[0]:g[1]]); end > e.episode && end-e.episode <= 10 {
+					e.episodeEnd = end
+				}
 			}
 		}
 		return e, true
@@ -366,14 +373,37 @@ func stripBracketsKeepEpisode(s string) string {
 	})
 }
 
+// cd, disc and dvd always mark a piece of one movie. "Part 2" may instead
+// be in the title ("Nymphomaniac Part 1 (2013)", "Dune Part Two"): it only
+// counts as a piece when it comes after the year ("Heat (1995) Part 1").
 func extractPart(s string) (int, string) {
 	m := rePart.FindStringSubmatchIndex(s)
 	if m == nil {
 		return 0, s
 	}
+	word := strings.ToLower(strings.TrimSpace(s[m[0]:m[2]]))
+	if strings.HasPrefix(word, "part") || strings.HasPrefix(word, "pt") {
+		if !hasYear(s[:m[0]]) {
+			return 0, s
+		}
+	}
 	part := atoi(s[m[2]:m[3]])
 	return part, strings.TrimSpace(s[:m[0]] + " " + s[m[1]:])
 }
+
+// hasYear reports whether s holds a release year (1900 to next year).
+func hasYear(s string) bool {
+	for _, t := range strings.Fields(separatorsToSpaces(strings.NewReplacer("(", " ", ")", " ").Replace(s))) {
+		if reYearTok.MatchString(t) && plausibleYear(atoi(t)) {
+			return true
+		}
+	}
+	return false
+}
+
+// plausibleYear: a 4-digit number that can be a release year. "2049" in
+// "Blade.Runner.2049.1080p" is part of the title.
+func plausibleYear(y int) bool { return y >= 1900 && y <= time.Now().Year()+1 }
 
 // cleanTitle pulls a title and year out of a folder or file name such as
 // "Night.Shift.2023.1080p.BluRay.x264" or "The Long Harbor (2024)".
@@ -399,7 +429,7 @@ func cleanTitle(s string) (string, int) {
 	// so "1917.2019.1080p" keeps the title "1917".
 	yearIdx := -1
 	for i := len(toks) - 1; i >= 1; i-- {
-		if reYearTok.MatchString(toks[i]) {
+		if reYearTok.MatchString(toks[i]) && plausibleYear(atoi(toks[i])) {
 			yearIdx = i
 			break
 		}

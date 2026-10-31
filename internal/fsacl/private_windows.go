@@ -1,6 +1,7 @@
 //go:build windows
 
-package update
+// Package fsacl makes folders private to the account the server runs as.
+package fsacl
 
 import (
 	"fmt"
@@ -24,12 +25,12 @@ const (
 	sddlRevision1             = 1
 )
 
-// lockDir gives the updates folder an access list of its own, not
-// inherited from the data or cache folder (which the installer opens to
-// every user in sign-in mode): full control for SYSTEM, administrators and
-// the account the server runs as, nothing for anyone else. The installer
-// runs as an administrator, so no other account may swap it.
-func lockDir(dir string) error {
+// Private gives a folder an access list of its own, not inherited from the
+// one it's in (the installer opens the data and cache folders to every
+// user in sign-in mode): full control for SYSTEM, administrators and the
+// account the server runs as, nothing for anyone else. Files made in it
+// afterwards inherit that.
+func Private(dir string) error {
 	sid, err := currentSID()
 	if err != nil {
 		return err

@@ -36,6 +36,12 @@ const RELAY_WARNING_AFTER: Duration = Duration::from_secs(20);
 /// A direct path seen this recently proves UDP works, whatever the network
 /// report's probes say.
 const DIRECT_SEEN_FRESH: Duration = Duration::from_secs(30 * 60);
+/// A device whose connection stayed up this long and carried a request is
+/// "known": it no longer counts against the handshake limit for everyone,
+/// so someone cycling fresh node IDs can't keep real devices out.
+const KNOWN_AFTER: Duration = Duration::from_secs(60);
+/// The most known devices remembered (oldest forgotten first).
+const MAX_KNOWN: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -62,6 +68,8 @@ struct GateState {
     blocked: RwLock<HashSet<EndpointId>>,
     window: Mutex<RateWindow<EndpointId>>,
     all: Mutex<RateWindow<()>>,
+    /// Devices seen working before, newest last (see KNOWN_AFTER).
+    known: Mutex<Vec<EndpointId>>,
 }
 
 impl GateState {
@@ -79,10 +87,27 @@ impl GateState {
             return Some((close_codes::RATE_LIMITED, b"too many connections"));
         }
         drop(window);
+        if self.is_known(id) {
+            return None;
+        }
         if !self.all.lock().unwrap_or_else(|e| e.into_inner()).allow(&(), now) {
             return Some((close_codes::RATE_LIMITED, b"server busy"));
         }
         None
+    }
+
+    fn is_known(&self, id: &EndpointId) -> bool {
+        self.known.lock().unwrap_or_else(|e| e.into_inner()).contains(id)
+    }
+
+    fn remember(&self, id: EndpointId) {
+        let mut known = self.known.lock().unwrap_or_else(|e| e.into_inner());
+        known.retain(|k| k != &id);
+        known.push(id);
+        if known.len() > MAX_KNOWN {
+            let extra = known.len() - MAX_KNOWN;
+            known.drain(..extra).for_each(drop);
+        }
     }
 }
 
@@ -147,6 +172,7 @@ impl Server {
             blocked: RwLock::new(cfg.blocked.iter().copied().collect()),
             window: Mutex::new(RateWindow::new(cfg.max_conns_per_minute, Duration::from_secs(60))),
             all: Mutex::new(RateWindow::new(cfg.max_handshakes_per_minute, Duration::from_secs(60))),
+            known: Mutex::new(Vec::new()),
         });
 
         let ep = transport::endpoint_builder(&cfg.endpoint, secret)?
@@ -438,6 +464,7 @@ async fn handle_connection(inner: Arc<Inner>, conn: Connection) {
 
     let generation = inner.next_generation.fetch_add(1, Ordering::Relaxed);
     let counters = Arc::new(Counters::default());
+    let connected_at = Instant::now();
     let replaced = inner
         .peers
         .lock()
@@ -469,6 +496,10 @@ async fn handle_connection(inner: Arc<Inner>, conn: Connection) {
             Err(e) => break e.to_string(),
         }
     };
+
+    if connected_at.elapsed() >= KNOWN_AFTER && counters.total_streams.load(Ordering::Relaxed) > 0 {
+        inner.gate.remember(peer);
+    }
 
     let removed = {
         let mut map = inner.peers.lock().unwrap_or_else(|e| e.into_inner());

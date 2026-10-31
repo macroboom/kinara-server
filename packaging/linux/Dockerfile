@@ -28,7 +28,10 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl gnupg tini; \
     install -d -m 0755 /etc/apt/keyrings; \
-    curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key | gpg --dearmor -o /etc/apt/keyrings/jellyfin.gpg; \
+    curl -fsSL -o /tmp/jellyfin.key https://repo.jellyfin.org/jellyfin_team.gpg.key; \
+    gpg --show-keys --with-colons /tmp/jellyfin.key | grep -q '^fpr:::::::::4918AABC486CA052358D778D49023CD01DE21A7B:'; \
+    gpg --dearmor -o /etc/apt/keyrings/jellyfin.gpg /tmp/jellyfin.key; \
+    rm /tmp/jellyfin.key; \
     printf 'Types: deb\nURIs: https://repo.jellyfin.org/debian\nSuites: bookworm\nComponents: main\nArchitectures: %s\nSigned-By: /etc/apt/keyrings/jellyfin.gpg\n' "$TARGETARCH" \
       > /etc/apt/sources.list.d/jellyfin.sources; \
     apt-get update; \

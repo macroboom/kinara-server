@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -113,5 +114,32 @@ func TestNATPMP(t *testing.T) {
 	}
 	if mp.ExternalIP != "203.0.113.9" || mp.Internal != 32443 || mp.External != 32395 || mp.Lifetime != time.Hour || mp.Method != "natpmp" {
 		t.Errorf("mapping %+v", mp)
+	}
+}
+
+type countingMapper struct{ maps int }
+
+func (c *countingMapper) Map(ctx context.Context, internal, external int, lifetime time.Duration) (*Mapping, error) {
+	c.maps++
+	return &Mapping{Method: "natpmp", External: external, Internal: internal, Lifetime: time.Hour}, nil
+}
+func (c *countingMapper) Unmap(ctx context.Context, m *Mapping) {}
+
+// A router lease is renewed at half its life, whatever else is going on
+// (presence reports every minute used to keep putting it off for ever).
+func TestMappingRenewed(t *testing.T) {
+	cm := &countingMapper{}
+	m := &Manager{S: Settings{HTTPSPort: 8443}, mapper: cm, Log: slog.New(slog.DiscardHandler)}
+	m.refreshMapping(context.Background())
+	m.reported = time.Now() // a presence report just went out
+	m.refreshMapping(context.Background())
+	if cm.maps != 1 {
+		t.Fatalf("mapped %d times, want 1 (fresh lease)", cm.maps)
+	}
+	m.mapping.MadeAt = time.Now().Add(-31 * time.Minute)
+	m.reported = time.Now()
+	m.refreshMapping(context.Background())
+	if cm.maps != 2 {
+		t.Fatalf("mapped %d times, want a renewal past half-life", cm.maps)
 	}
 }

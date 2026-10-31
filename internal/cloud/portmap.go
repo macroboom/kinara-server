@@ -24,6 +24,8 @@ type Mapping struct {
 	External   int
 	Internal   int
 	Lifetime   time.Duration
+	// MadeAt is when the router last granted it (renewals count).
+	MadeAt time.Time
 }
 
 // portMapper opens an inbound TCP port on the home router.

@@ -136,7 +136,7 @@ func TestSessions(t *testing.T) {
 	if err != nil || got.ID != u.ID || exp != now()+100 && exp != now()+99 {
 		t.Fatalf("session: %+v %d %v", got, exp, err)
 	}
-	if err := s.SetPassword(ctx, u.ID, "new"); err != nil {
+	if err := s.SetPassword(ctx, u.ID, "new", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, err := s.SessionUser(ctx, "h1"); err != ErrNotFound {
@@ -247,5 +247,57 @@ func TestProfilesFiltersAndCast(t *testing.T) {
 	}
 	if photo, _ := s.CreditPhoto(ctx, alpha, 0); photo != "http://x/a.jpg" {
 		t.Errorf("photo = %q", photo)
+	}
+}
+
+// Merging a duplicate movie keeps what hung off it: My List, genres, and
+// the more recent watch progress.
+func TestMergeKeepsExtras(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	lib, err := s.CreateLibrary(ctx, "Movies", "/m", KindMovies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func() string {
+		it := Item{LibraryID: lib.ID, Kind: ItemMovie, Title: "Heat", SortTitle: "heat", SeasonNumber: -1, EpisodeNumber: -1}
+		if err := s.CreateItem(ctx, &it); err != nil {
+			t.Fatal(err)
+		}
+		return it.ID
+	}
+	keep, dup := mk(), mk()
+	u, err := s.CreateUser(ctx, "alex", "x", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.DefaultList(ctx, u.ProfileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddToList(ctx, u.ProfileID, list, dup); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetGenres(ctx, dup, []string{"Crime"}); err != nil {
+		t.Fatal(err)
+	}
+	s.PutWatch(ctx, u.ProfileID, WatchState{ItemID: keep, PositionSec: 100, LastPlayedAt: 1000})
+	s.PutWatch(ctx, u.ProfileID, WatchState{ItemID: dup, PositionSec: 4000, LastPlayedAt: 2000})
+
+	if err := s.MergeItem(ctx, dup, keep); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM list_items WHERE item_id = ?`, keep).Scan(&n)
+	if n != 1 {
+		t.Fatalf("list entries on the kept movie: %d", n)
+	}
+	g, _ := s.Genres(ctx, []string{keep})
+	if len(g[keep]) != 1 {
+		t.Fatalf("genres %v", g)
+	}
+	w, _ := s.GetWatch(ctx, u.ProfileID, keep)
+	if w.PositionSec != 4000 {
+		t.Fatalf("progress %v, want the more recent 4000", w.PositionSec)
 	}
 }

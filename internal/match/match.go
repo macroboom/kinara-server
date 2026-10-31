@@ -294,6 +294,23 @@ func (m *Matcher) matchMovie(ctx context.Context, it store.Item) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// Details for a known ID, fetched once here.
+	var known *tmdb.MovieDetails
+	if id != 0 {
+		d, err := m.Src.Movie(ctx, id)
+		switch {
+		case isNotFound(err):
+			// A TMDB ID that no longer exists (a {tmdb-123} tag with a
+			// typo, a title TMDB merged away): forget it and search.
+			m.Log.Warn("match: TMDB has no movie with this item's ID; searching instead", "item", it.Title, "tmdb", id)
+			_ = m.Store.DeleteExternalID(ctx, it.ID, store.ProviderTMDBMovie)
+			id = 0
+		case err != nil:
+			return false, err
+		default:
+			known = &d
+		}
+	}
 	if id == 0 {
 		var best *candidate
 		var cands []candidate
@@ -333,8 +350,10 @@ func (m *Matcher) matchMovie(ctx context.Context, it store.Item) (bool, error) {
 		id, conf = best.id, math.Min(best.score, 1)
 	}
 
-	d, err := m.Src.Movie(ctx, id)
-	if err != nil {
+	var d tmdb.MovieDetails
+	if known != nil {
+		d = *known
+	} else if d, err = m.Src.Movie(ctx, id); err != nil {
 		return false, err
 	}
 	it.Title = d.Title
@@ -384,6 +403,20 @@ func (m *Matcher) matchShow(ctx context.Context, it store.Item) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	var known *tmdb.TVDetails
+	if id != 0 {
+		d, err := m.Src.TV(ctx, id)
+		switch {
+		case isNotFound(err):
+			m.Log.Warn("match: TMDB has no show with this item's ID; searching instead", "item", it.Title, "tmdb", id)
+			_ = m.Store.DeleteExternalID(ctx, it.ID, store.ProviderTMDBTV)
+			id = 0
+		case err != nil:
+			return false, err
+		default:
+			known = &d
+		}
+	}
 	if id == 0 {
 		var best *candidate
 		qs := m.queries(ctx, it)
@@ -425,8 +458,10 @@ func (m *Matcher) matchShow(ctx context.Context, it store.Item) (bool, error) {
 		id, conf = best.id, math.Min(best.score, 1)
 	}
 
-	d, err := m.Src.TV(ctx, id)
-	if err != nil {
+	var d tmdb.TVDetails
+	if known != nil {
+		d = *known
+	} else if d, err = m.Src.TV(ctx, id); err != nil {
 		return false, err
 	}
 	it.Title = d.Name
@@ -484,6 +519,17 @@ func (m *Matcher) queries(ctx context.Context, it store.Item) []string {
 	return buildQueries(it.Title, rel)
 }
 
+// categoryFolders are folder names people sort a library by, never searched
+// as titles (normalized: lower case, no punctuation).
+var categoryFolders = map[string]bool{
+	"tv": true, "tvshows": true, "tv shows": true, "shows": true, "series": true, "movies": true, "films": true,
+	"media": true, "videos": true, "video": true, "kids": true, "children": true, "family": true, "anime": true,
+	"cartoons": true, "comedy": true, "drama": true, "documentary": true, "documentaries": true, "action": true,
+	"horror": true, "thriller": true, "scifi": true, "sci fi": true, "animation": true, "classics": true,
+	"foreign": true, "4k": true, "uhd": true, "hd": true, "new": true, "other": true, "misc": true,
+	"english": true, "hindi": true, "bollywood": true, "hollywood": true, "christmas": true,
+}
+
 // buildQueries lists the searches for an item titled title, one of whose
 // files is at rel (relative to the library, may be empty).
 func buildQueries(title, rel string) []string {
@@ -517,9 +563,14 @@ func buildQueries(title, rel string) []string {
 		if dir := filepath.ToSlash(filepath.Dir(rel)); dir != "." {
 			segs := strings.Split(dir, "/")
 			for i := len(segs) - 1; i >= 0; i-- {
-				if t := parse.CleanTitle(segs[i]); !strings.HasPrefix(strings.ToLower(t), "season") {
-					add(t)
+				t := parse.CleanTitle(segs[i])
+				// "TV/Comedy/Show": a folder that sorts the library is no
+				// title, and searched as one it scores perfectly against
+				// itself (a show called "Comedy").
+				if strings.HasPrefix(strings.ToLower(t), "season") || categoryFolders[parse.Normalize(t)] {
+					continue
 				}
+				add(t)
 			}
 		}
 		add(parse.Parse(filepath.Base(rel)).Title)
@@ -600,6 +651,12 @@ func (m *Matcher) logNoMatch(it store.Item, tried []string, best *candidate) {
 		args = append(args, "best", fmt.Sprintf("%s (%d), tmdb %d, score %.2f", best.title, best.year, best.id, best.score))
 	}
 	m.Log.Info("no confident match", args...)
+}
+
+// isNotFound: TMDB answered that the ID doesn't exist.
+func isNotFound(err error) bool {
+	var se *tmdb.StatusError
+	return errors.As(err, &se) && se.Code == 404
 }
 
 func (m *Matcher) unmatched(ctx context.Context, it store.Item, best *candidate) error {

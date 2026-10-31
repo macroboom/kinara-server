@@ -62,13 +62,22 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// SetPassword changes a password and signs the user out everywhere.
-func (s *Store) SetPassword(ctx context.Context, userID int64, hash string) error {
-	if _, err := s.db.ExecContext(ctx, qSetPassword, hash, userID); err != nil {
+// SetPassword changes a password and signs the user out everywhere, except
+// the session keep (the one changing its own password; "" for none). Both
+// happen together or not at all.
+func (s *Store) SetPassword(ctx context.Context, userID int64, hash, keep string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, qDeleteSessions, userID)
-	return err
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, qSetPassword, hash, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND token_hash != ?`, userID, keep); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CreateSession(ctx context.Context, tokenHash string, userID int64, device string, expiresAt int64) error {

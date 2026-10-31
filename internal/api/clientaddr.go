@@ -11,8 +11,10 @@ import (
 
 // localAddress: loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7),
 // link-local, carrier-grade NAT (100.64/10, which Tailscale uses), or on one
-// of the server's own networks. The last covers home networks with public
-// IPv6: a laptop next to the server often connects from its global address.
+// of the server's own IPv6 networks. The last covers home networks with
+// public IPv6: a laptop next to the server often connects from its global
+// address. Public IPv4 networks don't count: on a VPS, the server's /24 is
+// other people's machines.
 func localAddress(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
 		return true
@@ -37,7 +39,7 @@ func ownNetworks() []*net.IPNet {
 		ownNets.nets = ownNets.nets[:0]
 		if addrs, err := net.InterfaceAddrs(); err == nil {
 			for _, a := range addrs {
-				if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() {
+				if n, ok := a.(*net.IPNet); ok && !n.IP.IsLoopback() && n.IP.To4() == nil {
 					// A single address (/32, /128) says nothing about neighbours.
 					if ones, bits := n.Mask.Size(); ones < bits {
 						ownNets.nets = append(ownNets.nets, n)

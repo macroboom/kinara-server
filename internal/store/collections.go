@@ -72,6 +72,10 @@ func (s *Store) SetCollection(ctx context.Context, itemID string, c *Collection)
 			return err
 		}
 	}
+	// A franchise this movie was the last of goes.
+	if _, err := tx.ExecContext(ctx, qDeleteEmptyCollections); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE items SET collection_at = ? WHERE id = ?`, now(), itemID); err != nil {
 		return err
 	}
@@ -119,12 +123,12 @@ func (s *Store) SetCollectionDetails(ctx context.Context, id int, overview strin
 }
 
 // CollectionMovies lists a franchise's movies that have a file, oldest
-// first.
+// first; ones with no date at all go last.
 func (s *Store) CollectionMovies(ctx context.Context, id int) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+itemColsI+` FROM items i
 		JOIN item_collections ic ON ic.item_id = i.id
 		WHERE ic.collection_id = ? AND i.kind = 'movie' AND `+availableSQL+`
-		ORDER BY COALESCE(i.air_date, ''), COALESCE(i.year, 0), i.sort_title`, id)
+		ORDER BY COALESCE(NULLIF(i.year, 0), 9999), COALESCE(NULLIF(i.air_date, ''), '9999'), i.sort_title`, id)
 	if err != nil {
 		return nil, err
 	}

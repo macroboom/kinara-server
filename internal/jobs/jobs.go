@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -217,12 +218,24 @@ func (w *Worker) pass(ctx context.Context) bool {
 		}
 	}
 	if w.Intros {
-		seasons, err := w.Store.SeasonsNeedingIntros(ctx, 1)
+		seasons, err := w.Store.SeasonsNeedingIntros(ctx, 50)
 		if err != nil {
 			w.Log.Warn("intro queue", "err", err)
-		} else if len(seasons) > 0 {
-			w.detectSeason(ctx, seasons[0])
-			return true
+		} else {
+			for _, id := range seasons {
+				if w.hasFailed("season:" + id) {
+					continue
+				}
+				w.detectSeason(ctx, id)
+				// Still waiting after a pass (saving failed: a full disk,
+				// say): leave it until the server restarts rather than
+				// decoding the season again straight away, for ever.
+				if again, err := w.Store.SeasonsNeedingIntros(ctx, 50); err == nil && slices.Contains(again, id) && ctx.Err() == nil {
+					w.Log.Warn("intro detection didn't finish a season; skipping it until the server restarts", "season", id)
+					w.markFailed("season:" + id)
+				}
+				return true
+			}
 		}
 	}
 	if w.Trickplay != nil {

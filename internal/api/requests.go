@@ -251,22 +251,30 @@ func (s *Server) createRequest(w http.ResponseWriter, r *http.Request, u store.U
 		return
 	}
 
-	s.reqs.mu.Lock()
-	defer s.reqs.mu.Unlock()
-	if dup, err := s.Store.FindOpenRequest(ctx, body.Kind, body.TMDBID, body.Mode, body.Seasons); err == nil {
-		writeJSON(w, http.StatusOK, createRequestResponse{requestView: newRequestView(dup), Duplicate: true})
-		return
-	} else if !errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
+	// What may take a while (TMDB's other IDs) before the lock, so one
+	// slow answer doesn't hold up everyone else's requests.
 	client, err := s.Store.SessionClient(ctx, sessionFrom(r).tokenHash)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	ids := s.titleIDs(ctx, body.Kind, body.TMDBID)
+
+	s.reqs.mu.Lock()
+	defer s.reqs.mu.Unlock()
+	if dup, err := s.Store.FindOpenRequest(ctx, body.Kind, body.TMDBID, body.Mode, body.Seasons); err == nil {
+		view := newRequestView(dup)
+		if dup.UserID != u.ID && !u.IsAdmin {
+			// Someone else's: that it exists, not their note or device.
+			view.Note, view.RequestedBy, view.Device = "", requestUserView{}, requestDeviceView{}
+		}
+		writeJSON(w, http.StatusOK, createRequestResponse{requestView: view, Duplicate: true})
+		return
+	} else if !errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	req := store.Request{
 		Kind: body.Kind, TMDBID: body.TMDBID, TVDBID: ids.TVDBID, IMDBID: ids.IMDBID,
 		Title: title.Title, Year: title.Year, PosterPath: tmdbPath(title.PosterURL),
@@ -289,7 +297,7 @@ func (s *Server) createRequest(w http.ResponseWriter, r *http.Request, u store.U
 		writeJSON(w, http.StatusCreated, createRequestResponse{requestView: newRequestView(req), OnTheWay: true})
 		return
 	}
-	if client.Trusted {
+	if client.Trusted && s.trustedFor(ctx, client.ID, u.ID) {
 		req.Status, req.Auto, req.DecidedAt = store.RequestApproved, true, req.CreatedAt
 	}
 	if err := s.Store.CreateRequest(ctx, &req); err != nil {
@@ -301,6 +309,18 @@ func (s *Server) createRequest(w http.ResponseWriter, r *http.Request, u store.U
 		s.emitRequest("request.approved", req)
 	}
 	writeJSON(w, http.StatusCreated, createRequestResponse{requestView: newRequestView(req), Sent: req.Auto})
+}
+
+// trustedFor: a trusted device's requests are approved straight away only
+// while it's signed in to just this account. A device's ID is made up by
+// the app and sent in the clear, so someone who learns a trusted device's
+// ID and signs in to their own account with it gets no free approvals.
+func (s *Server) trustedFor(ctx context.Context, clientID string, userID int64) bool {
+	if store.SessionOfDerivedClient(clientID) != "" {
+		return true // made from this very session (an app that sends no ID)
+	}
+	users, err := s.Store.ClientUsers(ctx, clientID)
+	return err == nil && len(users) == 1 && users[0] == userID
 }
 
 func parseSeasonsKey(key string) []int {

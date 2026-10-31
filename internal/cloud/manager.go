@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"kinara/internal/fsacl"
 )
 
 // Settings come from the environment (see main).
@@ -442,8 +444,9 @@ func (m *Manager) refreshMapping(ctx context.Context) {
 	m.mu.Lock()
 	cur := m.mapping
 	m.mu.Unlock()
-	// NAT-PMP leases are renewed at half-life; UPnP every 20 minutes.
-	if cur != nil && cur.Lifetime > 0 && time.Since(m.reported) < cur.Lifetime/2 {
+	// NAT-PMP leases are renewed at half-life; a UPnP mapping with no
+	// lifetime every 20 minutes (routers forget them on a reboot).
+	if cur != nil && time.Since(cur.MadeAt) < renewAfter(cur) {
 		return
 	}
 	mctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -465,7 +468,16 @@ func (m *Manager) refreshMapping(ctx context.Context) {
 	if m.mapping == nil {
 		m.Log.Info("cloud: router port open", "method", mp.Method, "external", mp.ExternalIP, "port", mp.External)
 	}
+	mp.MadeAt = time.Now()
 	m.mapErr, m.mapping = "", mp
+}
+
+// renewAfter is how long a router mapping is left before asking again.
+func renewAfter(mp *Mapping) time.Duration {
+	if mp.Lifetime > 0 {
+		return mp.Lifetime / 2
+	}
+	return 20 * time.Minute
 }
 
 // --- certificate --------------------------------------------------------------------
@@ -564,6 +576,7 @@ func (m *Manager) renewCert(ctx context.Context) error {
 	c.Leaf, _ = x509.ParseCertificate(c.Certificate[0])
 	cp, kp := m.certPaths()
 	os.MkdirAll(filepath.Dir(cp), 0o700)
+	_ = fsacl.Private(filepath.Dir(cp)) // the TLS key: this account's only
 	if err := os.WriteFile(kp, key, 0o600); err != nil {
 		return err
 	}

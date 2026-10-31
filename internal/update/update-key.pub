@@ -3,3 +3,4 @@
 # the raw 32-byte public key. A server built while this has no key can't
 # install updates itself. To make the key pair (once), see
 # packaging/publish-downloads.sh.
++aRhNT5KVuAoAeV6BiDMwJFLU0nEvEFUHgnGl3qy2Qo=

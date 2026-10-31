@@ -29,7 +29,11 @@ type Client struct {
 var clientIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
 // ValidClientID reports whether an app-made client ID is acceptable.
-func ValidClientID(id string) bool { return clientIDPattern.MatchString(id) }
+// One shaped like a derived ID (see DerivedClientID) isn't: those are made
+// by the server from a session, and an app mustn't claim one.
+func ValidClientID(id string) bool {
+	return clientIDPattern.MatchString(id) && SessionOfDerivedClient(id) == ""
+}
 
 // derivedClientPrefix starts the client ID given to sessions from apps that
 // don't send one, so they still list and can be trusted.
@@ -66,37 +70,40 @@ func scanClient(r scanner) (Client, error) {
 // UpsertClient records a client as it signs in. What the app reports
 // replaces what was there, but trust and the first-seen time are kept. A
 // name the owner gave it is kept too when the app sends none. created
-// reports whether this install was new.
+// reports whether this install was new. It's one statement, so two first
+// sign-ins from the same install at once don't collide.
 func (s *Store) UpsertClient(ctx context.Context, c Client) (out Client, created bool, err error) {
 	c.Icon = ClientIcon(c)
 	t := now()
-	old, err := s.GetClient(ctx, c.ID)
-	switch {
-	case errors.Is(err, ErrNotFound):
-		_, err = s.db.ExecContext(ctx, `INSERT INTO clients (`+clientCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-			c.ID, c.Name, c.Platform, c.Brand, c.Model, c.OS, c.App, c.FormFactor, c.Icon, t, t)
-		if err != nil {
-			return Client{}, false, err
-		}
-		c.FirstSeen, c.LastSeen = t, t
-		return c, true, nil
-	case err != nil:
-		return Client{}, false, err
-	}
-	// A name the owner gave it stays; so does the old one when the app sends none.
-	var named int
-	_ = s.db.QueryRowContext(ctx, `SELECT named FROM clients WHERE id = ?`, c.ID).Scan(&named)
-	if c.Name == "" || named != 0 {
-		c.Name = old.Name
-	}
-	_, err = s.db.ExecContext(ctx, `UPDATE clients SET name = ?, platform = ?, brand = ?, model = ?, os = ?, app = ?,
-		form_factor = ?, icon = ?, last_seen = ? WHERE id = ?`,
-		c.Name, c.Platform, c.Brand, c.Model, c.OS, c.App, c.FormFactor, c.Icon, t, c.ID)
+	out, err = scanClient(s.db.QueryRowContext(ctx, `INSERT INTO clients (`+clientCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name = CASE WHEN clients.named != 0 OR excluded.name = '' THEN clients.name ELSE excluded.name END,
+			platform = excluded.platform, brand = excluded.brand, model = excluded.model, os = excluded.os,
+			app = excluded.app, form_factor = excluded.form_factor, icon = excluded.icon, last_seen = excluded.last_seen
+		RETURNING `+clientCols,
+		c.ID, c.Name, c.Platform, c.Brand, c.Model, c.OS, c.App, c.FormFactor, c.Icon, t, t))
 	if err != nil {
 		return Client{}, false, err
 	}
-	c.Trusted, c.FirstSeen, c.LastSeen = old.Trusted, old.FirstSeen, t
-	return c, false, nil
+	return out, out.FirstSeen == t && !out.Trusted, nil
+}
+
+// ClientUsers are the accounts with a session on a client.
+func (s *Store) ClientUsers(ctx context.Context, clientID string) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT user_id FROM sessions WHERE client_id = ?`, clientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // GetClient returns a client by ID.

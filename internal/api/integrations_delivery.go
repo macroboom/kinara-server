@@ -269,8 +269,7 @@ func (s *Server) post(ctx context.Context, h store.Webhook, deliveryID, event st
 	req.Header.Set("X-Kinara-Timestamp", strconv.FormatInt(ts, 10))
 	req.Header.Set("X-Kinara-Signature", signature(h.Secret, ts, body))
 
-	client := &http.Client{CheckRedirect: sameHostRedirects}
-	resp, err := client.Do(req)
+	resp, err := webhookClient().Do(req)
 	a.Ms = time.Since(start).Milliseconds()
 	if err != nil {
 		a.Error = sendError(err, timeout)
@@ -295,11 +294,13 @@ func (s *Server) post(ctx context.Context, h store.Webhook, deliveryID, event st
 	return a
 }
 
-// sameHostRedirects follows a few redirects, but never to another host or
-// away from http(s): a webhook's address is where its data may go.
+// sameHostRedirects follows a few redirects, but never to another host,
+// away from http(s), or from https down to http: a webhook's address is
+// where its data may go.
 func sameHostRedirects(req *http.Request, via []*http.Request) error {
 	if len(via) >= 3 || req.URL.Host != via[0].URL.Host ||
-		(req.URL.Scheme != "http" && req.URL.Scheme != "https") {
+		(req.URL.Scheme != "http" && req.URL.Scheme != "https") ||
+		(via[0].URL.Scheme == "https" && req.URL.Scheme != "https") {
 		return http.ErrUseLastResponse
 	}
 	return nil
@@ -315,6 +316,11 @@ func sendError(err error, timeout time.Duration) string {
 		return "Couldn't connect: nothing is listening at that address"
 	case strings.Contains(err.Error(), "no such host"):
 		return "Couldn't find that host name"
+	case errors.Is(err, errWebhookTarget):
+		if webhooksLocalAllowed() {
+			return "Webhooks can't be sent to link-local addresses (like 169.254.169.254)"
+		}
+		return "Webhooks can't be sent to this computer or the home network (KINARA_WEBHOOKS_LOCAL=off)"
 	}
 	msg := err.Error()
 	if len(msg) > 300 {

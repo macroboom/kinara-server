@@ -45,6 +45,10 @@ type profileRequest struct {
 	AudioLang    *string `json:"audioLang"`
 	SubtitleLang *string `json:"subtitleLang"`
 	SubtitleMode *string `json:"subtitleMode"`
+	// CurrentPin or Password unlocks a PIN-protected profile that isn't
+	// the one in use (see unlockProfile).
+	CurrentPin string `json:"currentPin,omitempty"`
+	Password   string `json:"password,omitempty"`
 }
 
 // apply copies the fields that were sent onto p, checking each.
@@ -146,15 +150,12 @@ func (s *Server) updateProfile(w http.ResponseWriter, r *http.Request, u store.U
 	if !ok {
 		return
 	}
-	// A PIN-protected profile can only be changed while it's selected, so a
-	// child can't remove a parent's PIN from their own profile.
-	if p.HasPin && u.ProfileID != p.ID && !u.IsAdmin {
-		writeErr(w, http.StatusForbidden, "switch to this profile to change it")
-		return
-	}
 	var req profileRequest
 	if err := readJSON(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !s.unlockProfile(w, r, u, p, req.CurrentPin, req.Password) {
 		return
 	}
 	if err := req.apply(&p); err != nil {
@@ -173,8 +174,12 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request, u store.U
 	if !ok {
 		return
 	}
-	if p.HasPin && u.ProfileID != p.ID && !u.IsAdmin {
-		writeErr(w, http.StatusForbidden, "switch to this profile to remove it")
+	var req struct {
+		CurrentPin string `json:"currentPin"`
+		Password   string `json:"password"`
+	}
+	_ = readJSON(r, &req) // optional: only a protected profile needs it
+	if !s.unlockProfile(w, r, u, p, req.CurrentPin, req.Password) {
 		return
 	}
 	all, err := s.Store.Profiles(r.Context(), u.ID)
@@ -191,6 +196,44 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request, u store.U
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// errProfileLocked is the answer when a PIN-protected profile that isn't in
+// use is changed without its PIN; apps ask for it on this message.
+const errProfileLocked = "enter this profile's PIN, or the account password, to change it"
+
+// unlockProfile lets a change to a PIN-protected profile through when it's
+// the profile in use, or with its PIN or the account's password. Being an
+// admin isn't enough: on a home server the owner's account is the admin
+// one, so a child's tablet signed into it could otherwise remove a
+// parent's PIN. Wrong guesses count towards the same limit as choosing the
+// profile. It writes the refusal itself.
+func (s *Server) unlockProfile(w http.ResponseWriter, r *http.Request, u store.User, p store.Profile, pin, password string) bool {
+	if !p.HasPin || u.ProfileID == p.ID {
+		return true
+	}
+	if pin == "" && password == "" {
+		writeErr(w, http.StatusForbidden, errProfileLocked)
+		return false
+	}
+	key := "pin:" + strconv.FormatInt(p.ID, 10)
+	if err := s.limiter.Allow(key); err != nil {
+		writeErr(w, http.StatusTooManyRequests, err.Error())
+		return false
+	}
+	ok := pin != "" && auth.CheckPassword(p.PinHash, pin)
+	if !ok && password != "" {
+		if full, err := s.Store.GetUser(r.Context(), u.ID); err == nil {
+			ok = auth.CheckPassword(full.PasswordHash, password)
+		}
+	}
+	if !ok {
+		s.limiter.Fail(key)
+		writeErr(w, http.StatusForbidden, "wrong PIN or password")
+		return false
+	}
+	s.limiter.Reset(key)
+	return true
 }
 
 // selectProfile switches this device to a profile, checking its PIN.

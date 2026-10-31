@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -291,7 +292,7 @@ func (s *Server) Handler() http.Handler {
 	// Built-in web page.
 	s.uiRoutes(mux)
 
-	return s.logRequests(mux)
+	return s.logRequests(sameOrigin(mux))
 }
 
 type ctxKey struct{}
@@ -419,6 +420,42 @@ func (w *statusWriter) ReadFrom(r io.Reader) (int64, error) {
 	n, err := io.Copy(w.ResponseWriter, r)
 	w.sent(n)
 	return n, err
+}
+
+// sameOrigin refuses a change (anything but GET, HEAD or OPTIONS) that
+// rides on the session cookie but came from another site. SameSite=Lax
+// already keeps the cookie off most cross-site requests; this also covers
+// a sibling site on the same domain and older browsers. Apps and the web
+// app send their token in the Authorization header and aren't affected.
+func sameOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions &&
+			r.Header.Get("Authorization") == "" && !crossSiteOK(r) {
+			if c, err := r.Cookie(cookieName); err == nil && c.Value != "" {
+				writeErr(w, http.StatusForbidden, "this request came from another site")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// crossSiteOK: the browser says the request is from this site (or typed in
+// by the person), or, without that header, its Origin is this host.
+func crossSiteOK(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none":
+		return true
+	case "":
+	default:
+		return false
+	}
+	o := r.Header.Get("Origin")
+	if o == "" || o == "null" {
+		return o == "" // no Origin: not a browser's cross-site request
+	}
+	u, err := url.Parse(o)
+	return err == nil && strings.EqualFold(u.Host, r.Host)
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {

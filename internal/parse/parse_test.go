@@ -294,3 +294,33 @@ func TestCorpus(t *testing.T) {
 		}
 	}
 }
+
+// Review fixes: "Part N" in a title, 4-digit numbers that aren't years,
+// and a number after an episode marker that isn't a second episode.
+func TestParseReviewCases(t *testing.T) {
+	a := Parse("Nymphomaniac Part 1 (2013).mkv")
+	b := Parse("Nymphomaniac Part 2 (2013).mkv")
+	if a.Part != 0 || b.Part != 0 || a.Title == b.Title {
+		t.Errorf("parts in titles: %+v / %+v", a, b)
+	}
+	if p := Parse("Heat (1995) Part 2.mkv"); p.Part != 2 || p.Title != "Heat" {
+		t.Errorf("split movie: %+v", p)
+	}
+	if p := Parse("Long Division (2010) - cd1.avi"); p.Part != 1 {
+		t.Errorf("cd1: %+v", p)
+	}
+	if p := Parse("Blade.Runner.2049.1080p.BluRay.mkv"); p.Year != 0 || p.Title != "Blade Runner 2049" {
+		t.Errorf("2049: %+v", p)
+	}
+	if p := Parse("Blade.Runner.2049.2017.1080p.mkv"); p.Year != 2017 || p.Title != "Blade Runner 2049" {
+		t.Errorf("2049 with year: %+v", p)
+	}
+	if p := Parse("Show/Season 1/Show - S01E01 - 10 Years.mkv"); p.Episode != 1 || p.EpisodeEnd != 1 {
+		t.Errorf("title number: %+v", p)
+	}
+	for _, name := range []string{"Show - S01E01E02.mkv", "Show - S01E01-E02.mkv", "Show - S01E01-02.mkv", "Show - S01E01 - E02.mkv"} {
+		if p := Parse("Show/Season 1/" + name); p.Episode != 1 || p.EpisodeEnd != 2 {
+			t.Errorf("%s: %+v", name, p)
+		}
+	}
+}

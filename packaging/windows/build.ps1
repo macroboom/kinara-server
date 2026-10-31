@@ -131,7 +131,7 @@ if (-not $SkipSidecar) {
   Need cargo "Install Rust from https://rustup.rs (MSVC toolchain)"
   Push-Location (Join-Path $repo "sidecar")
   try {
-    cargo build --release -p kinara-iroh; Check-Exit "cargo build"
+    cargo build --release --locked -p kinara-iroh; Check-Exit "cargo build"
     Copy-Item "target\release\kinara-iroh.exe" $stage
   } finally { Pop-Location }
 } else {

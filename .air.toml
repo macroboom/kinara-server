@@ -12,7 +12,10 @@ tmp_dir = "tmp"
   # Templates and migrations are embedded, so they need a rebuild too.
   include_ext = ["go", "html", "css", "js", "sql"]
   include_file = [".env"]
-  exclude_dir = ["tmp", "kinara-data", "vendor", ".git"]
+  # Only cmd and internal hold server code. packaging (installers, build
+  # scripts) and sidecar (Rust, with a huge target folder) don't, and
+  # watching them made every build or cargo run restart the server.
+  exclude_dir = ["tmp", "kinara-data", "vendor", ".git", ".github", "packaging", "sidecar", "out", "node_modules"]
   exclude_regex = ["_test\\.go$"]
   # Wait for a burst of saves to finish before rebuilding.
   delay = 500

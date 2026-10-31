@@ -86,7 +86,13 @@ mv "$work/Release" "dists/$suite/Release"
 
 gpgargs=(--batch --yes --local-user "$GPG_KEY_ID")
 if [ -n "${GPG_PASSPHRASE:-}" ]; then
-  gpgargs+=(--pinentry-mode loopback --passphrase "$GPG_PASSPHRASE")
+  # From a file only this script can read, not the command line (which
+  # other processes on the machine can see).
+  passfile="$(mktemp)"
+  chmod 600 "$passfile"
+  printf '%s' "$GPG_PASSPHRASE" > "$passfile"
+  trap 'rm -rf "$work"; rm -f "$passfile"' EXIT
+  gpgargs+=(--pinentry-mode loopback --passphrase-file "$passfile")
 fi
 gpg "${gpgargs[@]}" --clearsign -o "dists/$suite/InRelease" "dists/$suite/Release"
 gpg "${gpgargs[@]}" --armor --detach-sign -o "dists/$suite/Release.gpg" "dists/$suite/Release"

@@ -211,12 +211,14 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request, u store.User
 			accountErr(w, err)
 			return
 		}
-		if err := s.Store.SetPassword(r.Context(), id, hash); err != nil {
+		// Signed out everywhere, except here when it's your own password.
+		keep := ""
+		if id == u.ID {
+			keep = sessionFrom(r).tokenHash
+		}
+		if err := s.Store.SetPassword(r.Context(), id, hash, keep); err != nil {
 			accountErr(w, err)
 			return
-		}
-		if id != u.ID {
-			_ = s.Store.DeleteUserSessions(r.Context(), id)
 		}
 	}
 	if req.IsAdmin != nil {

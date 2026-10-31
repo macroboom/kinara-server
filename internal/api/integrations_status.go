@@ -263,6 +263,10 @@ func statusIdent(upd statusUpdate) string {
 	var id string
 	switch {
 	case upd.Ref != "":
+		// The sender's text: kept short, it's a key in the table.
+		if ref := upd.Ref; len(ref) > 200 {
+			return "ref:" + ref[:200]
+		}
 		return "ref:" + upd.Ref
 	case upd.TMDBID > 0:
 		id = fmt.Sprintf("tmdb:%s:%d", upd.Kind, upd.TMDBID)

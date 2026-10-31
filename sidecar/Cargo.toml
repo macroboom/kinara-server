@@ -8,6 +8,9 @@ members = [
     "crates/kinara-e2e",
     "crates/kinara-tunnel-ffi",
 ]
+# Patched copies of other crates (see [patch.crates-io] at the bottom): used
+# in their place, never built or tested as part of this workspace.
+exclude = ["patches"]
 
 [workspace.package]
 version = "0.1.0"
@@ -42,3 +45,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Patched crates for Apple devices. Drop each once a release fixes it.
+#
+# netdev 0.46.3 (via iroh's netwatch) doesn't build for iPhone: it uses
+# libc's in6_ifreq, which libc only defines for macOS. patches/netdev is
+# 0.46.3 with that struct defined in netdev itself
+# (src/os/darwin/ipv6_addr_flags.rs, "Kinara patch").
+#
+# Apple TV: crates that pick their Apple code with target_os = "ios" build
+# with no platform code on tvOS. patches/add-tvos.py copies such a crate
+# here with tvOS added next to iOS, and adds its line below (netdev has
+# both changes). See each copy's KINARA_PATCH.md.
+[patch.crates-io]
+netdev = { path = "patches/netdev" }

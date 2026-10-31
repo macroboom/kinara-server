@@ -125,7 +125,9 @@ func (h *HLS) startOnce(ctx context.Context, r Request, caps ffmpeg.Caps) (id st
 	tail := &ffmpeg.Tail{N: 2048}
 	stats := &statsSplitter{rest: tail, onStat: live.stat}
 	cmd.Stderr = stats
-	if err := ffmpeg.StartLow(cmd); err != nil {
+	// Someone is watching this: normal priority, not the low one that
+	// thumbnails and intro detection run at.
+	if err := cmd.Start(); err != nil {
 		cancel()
 		release()
 		t.unregister(live)

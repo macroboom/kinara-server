@@ -17,7 +17,7 @@ func canLaunch(kind string) bool { return kind == KindWindows }
 // verify has nothing to add on Windows: the installer isn't code signed
 // (yet), so the size and checksum from the signed release list are the
 // check, made again right before launch, in a folder only this account and
-// administrators can change (lockDir).
+// administrators can change (fsacl.Private).
 func verify(ctx context.Context, kind, path string) error { return nil }
 
 const (

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"kinara/internal/auth"
+	"kinara/internal/cloud"
 	"kinara/internal/parse"
 	"kinara/internal/store"
 	"kinara/internal/watch"
@@ -99,9 +100,12 @@ func redirect(w http.ResponseWriter, r *http.Request, to, msg, errMsg string) {
 	http.Redirect(w, r, to, http.StatusSeeOther)
 }
 
-func setSessionCookie(w http.ResponseWriter, token string) {
+// setSessionCookie signs the built-in pages in. Over HTTPS (the server's
+// own, or the cloud relay's) the cookie is marked Secure, so it's never sent
+// over plain HTTP.
+func setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: token, Path: "/", HttpOnly: true,
+		Name: cookieName, Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil || cloud.FromInternet(r),
 		SameSite: http.SameSiteLaxMode, MaxAge: int(sessionTTL.Seconds()),
 	})
 }
@@ -178,7 +182,7 @@ func (s *Server) uiHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cont, err := s.Watch.Continue(r.Context(), a.user.ID, 12)
+	cont, err := s.Watch.Continue(r.Context(), a.user.ProfileID, 12)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -196,6 +200,10 @@ func (s *Server) uiHome(w http.ResponseWriter, r *http.Request) {
 // uiSetup creates the first admin account. It only works while there are
 // no users at all.
 func (s *Server) uiSetup(w http.ResponseWriter, r *http.Request) {
+	// One at a time with the API's setup, so two browsers racing on a fresh
+	// server can't both become the owner.
+	setupMu.Lock()
+	defer setupMu.Unlock()
 	n, err := s.Store.CountUsers(r.Context())
 	if err != nil || n > 0 {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -230,7 +238,7 @@ func (s *Server) uiSetup(w http.ResponseWriter, r *http.Request) {
 		redirect(w, r, "/login", "", err.Error())
 		return
 	}
-	setSessionCookie(w, token)
+	setSessionCookie(w, r, token)
 	redirect(w, r, "/", "Admin account created. Add your first library below.", "")
 }
 
@@ -244,7 +252,7 @@ func (s *Server) uiLogin(w http.ResponseWriter, r *http.Request) {
 		redirect(w, r, "/login", "", err.Error())
 		return
 	}
-	setSessionCookie(w, token)
+	setSessionCookie(w, r, token)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 

@@ -35,5 +35,3 @@ Thumbs.db
 packaging/*/tmdb.key
 packaging/*/opensubtitles.key
 packaging/*/subdl.key
-
-*.key

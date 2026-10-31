@@ -52,6 +52,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"kinara/internal/fsacl"
 )
 
 // DefaultURL is where releases are listed, signed.
@@ -460,7 +462,7 @@ func (u *Updater) download(ctx context.Context, f File) (string, error) {
 	}
 	// Other accounts on this computer mustn't be able to swap the
 	// installer before it runs (as an administrator).
-	if err := lockDir(u.Dir); err != nil {
+	if err := fsacl.Private(u.Dir); err != nil {
 		return "", fmt.Errorf("couldn't protect the updates folder: %w", err)
 	}
 	final := filepath.Join(u.Dir, f.Name)

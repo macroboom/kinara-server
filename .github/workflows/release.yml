@@ -60,29 +60,31 @@ jobs:
             runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out kinara-web (private)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/kinara-web
           token: ${{ secrets.WEB_REPO_TOKEN }}
           path: kinara-web
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: sidecar
           key: ${{ matrix.arch }}
-      - uses: oven-sh/setup-bun@v2
-
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - name: Tools
         run: |
           # Jellyfin's FFmpeg, as the .deb prefers: Ubuntu 22.04's own is 4.4.
-          curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg
+          # Only Jellyfin's own key (https://jellyfin.org/posts/jellyfin-apt-key).
+          curl -fsSL -o /tmp/jellyfin.key https://repo.jellyfin.org/jellyfin_team.gpg.key
+          gpg --show-keys --with-colons /tmp/jellyfin.key | grep -q '^fpr:::::::::4918AABC486CA052358D778D49023CD01DE21A7B:' ||
+            { echo "Jellyfin's key isn't the one expected" >&2; exit 1; }
+          sudo gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg /tmp/jellyfin.key
           printf 'Types: deb\nURIs: https://repo.jellyfin.org/ubuntu\nSuites: jammy\nComponents: main\nSigned-By: /usr/share/keyrings/jellyfin.gpg\n' |
             sudo tee /etc/apt/sources.list.d/jellyfin.sources >/dev/null
           sudo apt-get update
@@ -91,14 +93,20 @@ jobs:
           # nfpm makes the .deb.
           nfpm=2.47.0
           case "$(uname -m)" in x86_64) a=x86_64 ;; aarch64) a=arm64 ;; esac
-          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v$nfpm/nfpm_${nfpm}_Linux_$a.tar.gz" |
-            sudo tar -xz -C /usr/local/bin nfpm
+          case "$a" in
+            x86_64) sum=0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783 ;;
+            arm64) sum=1c0f5f2999b9a974bfb04fdb0cc3306096de530ac5dbb25d739cc5f5219c919c ;;
+          esac
+          curl -fsSL -o /tmp/nfpm.tgz "https://github.com/goreleaser/nfpm/releases/download/v$nfpm/nfpm_${nfpm}_Linux_$a.tar.gz"
+          echo "$sum  /tmp/nfpm.tgz" | sha256sum -c -
+          sudo tar -xzf /tmp/nfpm.tgz -C /usr/local/bin nfpm
           nfpm --version
 
       - name: Test
         run: |
           go vet ./...
           go test ./...
+          (cd sidecar && cargo test --workspace --locked)
 
       - name: Build
         env:
@@ -125,7 +133,7 @@ jobs:
           sudo journalctl -u kinara-server --no-pager | tail -n 20
           sudo apt-get remove -y kinara-server
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-${{ matrix.arch }}
           path: |
@@ -135,7 +143,7 @@ jobs:
           if-no-files-found: error
       # The web app and the entrypoint are the same for both: upload once.
       - if: matrix.arch == 'amd64'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-common
           path: |
@@ -150,26 +158,24 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Inside the checkout, at kinara-web: build.ps1 gets it as ..\..\kinara-web.
       - name: Check out kinara-web (private)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/kinara-web
           token: ${{ secrets.WEB_REPO_TOKEN }}
           path: kinara-web
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: sidecar
           key: windows
-      - uses: oven-sh/setup-bun@v2
-
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - name: Inno Setup
         run: choco install innosetup --no-progress -y
 
@@ -185,7 +191,7 @@ jobs:
           $version = if ($env:PUBLISH -eq 'true') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '' }
           ./packaging/windows/build.ps1 -Version $version -WebRepo '..\..\kinara-web'
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows
           path: |
@@ -200,27 +206,25 @@ jobs:
     env:
       MACOS_CERTS_P12: ${{ secrets.MACOS_CERTS_P12 }}
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check out kinara-web (private)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository_owner }}/kinara-web
           token: ${{ secrets.WEB_REPO_TOKEN }}
           path: kinara-web
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: sidecar
           key: macos
-      - uses: oven-sh/setup-bun@v2
-
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       # A keychain of its own for this run, with both Developer ID
       # certificates and the notarytool login, deleted at the end.
       - name: Signing keychain
@@ -271,7 +275,7 @@ jobs:
         if: always() && env.MACOS_CERTS_P12 != ''
         run: security delete-keychain "$RUNNER_TEMP/kinara.keychain-db" || true
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos
           path: |
@@ -287,22 +291,22 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: linux-*64
           merge-multiple: true
       # Uploaded from inside dist/, so it goes back there.
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: linux-common
           path: dist
       - name: Build context
         run: ls -R dist | head -n 30 && test -f dist/web/index.html && test -f dist/docker-entrypoint.sh
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         env:
           # GHCR shows a multi-arch image's description from the index.
           DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
@@ -323,12 +327,12 @@ jobs:
           flavor: |
             latest=auto
       - if: env.PUBLISH == 'true'
-        uses: docker/login-action@v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v7
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: dist
           file: packaging/linux/Dockerfile
@@ -346,16 +350,22 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: linux-*64
           merge-multiple: true
+      # The signing key is imported here rather than by a third-party
+      # action, so no outside code ever holds it.
       - id: gpg
-        uses: crazy-max/ghaction-import-gpg@v7
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+        name: Import the APT signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          fpr=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+          [ -n "$fpr" ] || { echo "no secret key imported" >&2; exit 1; }
+          echo "fingerprint=$fpr" >> "$GITHUB_OUTPUT"
       - name: Tools
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends apt-utils
       - name: Publish
@@ -374,16 +384,16 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: linux-*64
           merge-multiple: true
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows
           path: out
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos
           path: out
@@ -406,19 +416,19 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: linux-*64
           merge-multiple: true
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows
           path: out
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: macos
           path: out
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true

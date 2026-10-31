@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"kinara/internal/fsacl"
 )
 
 // Owner is the Kinara account the server is linked to.
@@ -82,6 +84,9 @@ func (f *stateFile) save(s *State) error {
 	if err := os.MkdirAll(filepath.Dir(f.path), 0o700); err != nil {
 		return err
 	}
+	// The server's secret is in here: only this account may read it (on
+	// Windows the data folder may be open to every user).
+	_ = fsacl.Private(filepath.Dir(f.path))
 	tmp := f.path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err

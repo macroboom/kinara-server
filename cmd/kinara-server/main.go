@@ -385,6 +385,12 @@ func serveUntil(parent context.Context, args []string) error {
 	ffmpegOK := d.ffmpeg.Available() == nil
 	if !ffmpegOK {
 		warnings = append(warnings, "ffmpeg was not found, so files the TV can't play won't be converted, and there are no preview thumbnails or Skip intro. Install ffmpeg or pass -ffmpeg /path/to/ffmpeg.")
+	} else {
+		// Without zscale or libplacebo, HDR converted for a screen that
+		// can't show it comes out washed out: say so once, here.
+		if c := d.ffmpeg.Caps(); !c.ToneMap && !c.Placebo {
+			warnings = append(warnings, "This FFmpeg can't turn HDR into SDR (it has neither zscale nor libplacebo), so HDR titles converted for screens without HDR will look washed out. Jellyfin's FFmpeg has both.")
+		}
 	}
 	if restoreErr != nil {
 		warnings = append(warnings, "Restoring a backup failed, so the library is as it was: "+restoreErr.Error())
@@ -426,7 +432,7 @@ func serveUntil(parent context.Context, args []string) error {
 	// (after a backup).
 	if u := env("KINARA_UPDATE_URL", update.DefaultURL); u != "off" {
 		// The installer is downloaded next to the database, not into the
-		// cache (which may be on a shared drive); lockDir keeps it this
+		// cache (which may be on a shared drive); fsacl.Private keeps it this
 		// account's.
 		srv.Updater = &update.Updater{URL: u, Current: version, Dir: filepath.Join(c.dataDir, "updates"), Log: d.log, Before: srv.BackupBeforeUpdate}
 		go srv.RunUpdates(ctx)
@@ -538,19 +544,33 @@ func serveUntil(parent context.Context, args []string) error {
 		}
 	case <-ctx.Done():
 		d.log.Info("shutting down")
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return httpSrv.Shutdown(shutCtx)
+		shutdown(httpSrv, srv, d.log)
+		return nil
 	case reason := <-restart:
 		d.log.Info("restarting", "why", reason)
 		// Background work (the remote access sidecar, scans) ends with ctx.
 		stop()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(shutCtx)
+		shutdown(httpSrv, srv, d.log)
 		return errRestart
 	}
 	return nil
+}
+
+// shutdown stops serving: requests get 10 seconds to finish, then the rest
+// (a stream being watched never finishes by itself) are cut off, which is
+// still a clean stop, so the Windows service doesn't start again. The
+// iPhone and Safari conversions are stopped too, rather than left running
+// after the server is gone.
+func shutdown(httpSrv *http.Server, srv *api.Server, log *slog.Logger) {
+	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := httpSrv.Shutdown(shutCtx); err != nil {
+		log.Info("closing the connections still open", "err", err)
+		_ = httpSrv.Close()
+	}
+	if srv.HLS != nil {
+		srv.HLS.Close()
+	}
 }
 
 func portOf(listen string) string {
@@ -687,7 +707,7 @@ func userCmd(args []string) error {
 		if err != nil {
 			return fmt.Errorf("user %s not found", *username)
 		}
-		if err := d.store.SetPassword(ctx, u.ID, hash); err != nil {
+		if err := d.store.SetPassword(ctx, u.ID, hash, ""); err != nil {
 			return err
 		}
 		fmt.Println("Password changed; the user was signed out everywhere.")
@@ -851,6 +871,13 @@ func startRemote(ctx context.Context, d *deps, srv *api.Server, handler http.Han
 	}
 	secret := hex.EncodeToString(secretBytes)
 	target := env("KINARA_TUNNEL_LISTEN", "127.0.0.1:8421")
+	// The listener first: with its port taken, the sidecar would hand
+	// devices' connections (and the secret) to whatever holds it.
+	ln, err := remote.Listen(target)
+	if err != nil {
+		d.log.Error("remote access off: the tunnel listener couldn't start (set KINARA_TUNNEL_LISTEN to a free port)", "listen", target, "err", err)
+		return
+	}
 	sc := &remote.Sidecar{
 		DataDir: dataDir,
 		Target:  target,
@@ -871,7 +898,7 @@ func startRemote(ctx context.Context, d *deps, srv *api.Server, handler http.Han
 	}
 	srv.Remote = sc
 	go func() {
-		if err := remote.Serve(ctx, target, secret, handler, d.log); err != nil {
+		if err := remote.ServeOn(ctx, ln, secret, handler, d.log); err != nil {
 			d.log.Error("remote access: tunnel listener failed", "listen", target, "err", err)
 		}
 	}()

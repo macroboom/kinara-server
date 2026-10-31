@@ -111,17 +111,29 @@ func (l *Listener) Accept() (net.Conn, error) {
 // who can reach it could claim to be any device, which the secret guards
 // against) until ctx ends.
 func Serve(ctx context.Context, addr, secret string, handler http.Handler, log *slog.Logger) error {
+	ln, err := Listen(addr)
+	if err != nil {
+		return err
+	}
+	return ServeOn(ctx, ln, secret, handler, log)
+}
+
+// Listen opens the tunnel listener (loopback only). Open it before starting
+// the sidecar: if the port is taken, whatever holds it must not receive the
+// tunnel's connections (and the secret in their PROXY header).
+func Listen(addr string) (net.Listener, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		return errors.New("the tunnel listener must be on a loopback address, such as 127.0.0.1:8421")
+		return nil, errors.New("the tunnel listener must be on a loopback address, such as 127.0.0.1:8421")
 	}
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
+	return net.Listen("tcp", addr)
+}
+
+// ServeOn runs handler on a listener from Listen until ctx ends.
+func ServeOn(ctx context.Context, ln net.Listener, secret string, handler http.Handler, log *slog.Logger) error {
 	srv := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 30 * time.Second,
@@ -141,7 +153,7 @@ func Serve(ctx context.Context, addr, secret string, handler http.Handler, log *
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
-	err = srv.Serve(&Listener{Listener: ln, Secret: secret, Log: log})
+	err := srv.Serve(&Listener{Listener: ln, Secret: secret, Log: log})
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

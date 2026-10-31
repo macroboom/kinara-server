@@ -159,3 +159,16 @@ func TestBuildQueriesCountry(t *testing.T) {
 		t.Fatalf("got %q, want [\"Coupling UK\" \"Coupling\" ...]", got)
 	}
 }
+
+// A folder the library is sorted by isn't searched as a title.
+func TestBuildQueriesSkipsCategories(t *testing.T) {
+	got := buildQueries("Some Show", "TV Shows/Comedy/Some Show/Season 1/Some Show - S01E01.mkv")
+	for _, q := range got {
+		if q == "Comedy" || q == "TV Shows" {
+			t.Fatalf("category folder searched: %q", got)
+		}
+	}
+	if got[0] != "Some Show" {
+		t.Fatalf("got %q", got)
+	}
+}

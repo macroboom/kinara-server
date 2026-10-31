@@ -10,45 +10,61 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"kinara/internal/auth"
 	"kinara/internal/images"
+	"kinara/internal/remote"
 	"kinara/internal/scanner"
 	"kinara/internal/store"
 )
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	n, err := s.Store.CountUsers(r.Context())
-	// The computer's name, so apps that find the server on the network can
-	// show "HOME-PC" rather than an address.
-	host, _ := os.Hostname()
+	// Anyone can ask, from anywhere. From the internet (the relay, the
+	// direct address, a forwarded port) the answer leaves out the
+	// computer's name and the remote access node ID: the node ID alone is
+	// enough to knock on the tunnel. Through the tunnel itself the asker
+	// already knew it (it's in the pairing code), and on the home network
+	// apps use both to tell servers apart.
+	public := fromInternet(r) && remote.PeerFrom(r.Context()) == nil
 	resp := map[string]any{
 		"ok":        err == nil,
 		"product":   "kinara",
-		"name":      host,
 		"version":   s.Version,
 		"setupDone": n > 0,
 		"metadata":  s.Matcher != nil,
 	}
+	if !public {
+		// The computer's name, so apps that find the server on the network
+		// can show "HOME-PC" rather than an address.
+		host, _ := os.Hostname()
+		resp["name"] = host
+	}
 	if s.Remote != nil {
-		resp["remote"] = remoteSummary(s.Remote.Info())
+		sum := remoteSummary(s.Remote.Info())
+		if public {
+			delete(sum, "nodeId")
+		}
+		resp["remote"] = sum
 	}
 	// A newer version, for the tray and the menu bar item on this computer.
 	if v := s.updateForHealth(r); v != "" {
 		resp["update"] = v
 	}
 	// The server's cloud ID lets an app confirm a direct or relay address
-	// reached the server it meant (it's in those addresses anyway).
+	// reached the server it meant. It stays in the public answer: it's in
+	// those addresses anyway.
 	if s.Cloud != nil {
 		if st := s.Cloud.State(); st != nil {
 			resp["serverId"] = st.ServerID
 		}
 	}
 	if err != nil {
-		// Say why, here and in the server's log, rather than just "not ok".
+		// The detail goes to the log; anyone can read this answer.
 		s.Log.Error("health check: database not answering", "err", err)
-		resp["error"] = "database: " + err.Error()
+		resp["error"] = "the server's database isn't answering (see the server log)"
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -92,21 +108,41 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 
 var errBadLogin = errors.New("wrong username or password")
 
+// dummyHash is checked against when there's no such user, so a wrong user
+// name takes as long to refuse as a wrong password (else the time tells
+// which names exist).
+var dummyHash = sync.OnceValue(func() string {
+	h, _ := auth.HashPassword("not a real password")
+	return h
+})
+
 // signIn checks a password and creates a device session.
+//
+// Failures count per address, and, for sign-ins from the internet, per
+// user name too. A user name's count doesn't stop sign-ins from the home
+// network, so someone guessing from outside can't lock the owner out of
+// their own house.
 func (s *Server) signIn(r *http.Request, username, password, device string) (string, store.User, error) {
-	keys := []string{"ip:" + clientIP(r), "user:" + strings.ToLower(username)}
+	remoteDevice := fromInternet(r)
+	keys := []string{auth.Key("ip:", clientIP(r))}
+	if remoteDevice {
+		keys = append(keys, auth.Key("user:", strings.ToLower(username)))
+	}
 	if err := s.limiter.Allow(keys...); err != nil {
 		return "", store.User{}, err
 	}
 	// Remote sign-ins also share one allowance (see tunnelLimiter).
-	remoteDevice := fromInternet(r)
 	if remoteDevice {
 		if err := s.tunnelLimiter.Allow("all"); err != nil {
 			return "", store.User{}, err
 		}
 	}
 	u, err := s.Store.UserByName(r.Context(), username)
-	if err != nil || !auth.CheckPassword(u.PasswordHash, password) {
+	hash := u.PasswordHash
+	if err != nil {
+		hash = dummyHash()
+	}
+	if ok := auth.CheckPassword(hash, password); err != nil || !ok {
 		s.limiter.Fail(keys...)
 		if remoteDevice {
 			s.tunnelLimiter.Fail("all")
