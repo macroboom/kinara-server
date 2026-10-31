@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,7 +154,8 @@ func TestDownloads(t *testing.T) {
 		t.Fatalf("headers %v", resp.Header)
 	}
 	probe, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_name,height,channels", "-of", "csv=p=0", out).Output()
-	if err != nil || string(probe) != "h264,480\naac,2\n" {
+	// ffprobe on Windows ends its lines with \r\n.
+	if err != nil || strings.ReplaceAll(string(probe), "\r\n", "\n") != "h264,480\naac,2\n" {
 		t.Fatalf("probe %q %v", probe, err)
 	}
 

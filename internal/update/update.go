@@ -170,6 +170,9 @@ type Updater struct {
 	// Before runs right before the installer starts (a backup, say). If
 	// it fails the update still goes ahead; the failure is logged.
 	Before func(ctx context.Context) error
+	// Key checks the release list's signature in place of Kinara's
+	// built-in release key (update-key.pub). For tests; leave it nil.
+	Key ed25519.PublicKey
 
 	mu      sync.Mutex
 	release *Release
@@ -180,6 +183,14 @@ type Updater struct {
 	state     string
 	message   string
 	got, size int64
+}
+
+// key is the public key release lists must be signed with (nil: none).
+func (u *Updater) key() ed25519.PublicKey {
+	if u.Key != nil {
+		return u.Key
+	}
+	return publicKey
 }
 
 func (u *Updater) kind() string {
@@ -311,11 +322,12 @@ func (u *Updater) fetch(ctx context.Context) (r *Release, signed bool, err error
 			return nil, false, errors.New("unreadable signed release list")
 		}
 		payload = p
-		signed = publicKey != nil && ed25519.Verify(publicKey, p, sig)
-		if publicKey != nil && !signed {
+		key := u.key()
+		signed = key != nil && ed25519.Verify(key, p, sig)
+		if key != nil && !signed {
 			return nil, false, errors.New("the release list's signature doesn't match Kinara's release key")
 		}
-	} else if publicKey != nil {
+	} else if u.key() != nil {
 		return nil, false, errors.New("the release list isn't signed")
 	}
 	var rel Release
@@ -374,7 +386,7 @@ func (u *Updater) Install(ctx context.Context) error {
 	}
 	if !u.signed {
 		u.mu.Unlock()
-		if publicKey == nil {
+		if u.key() == nil {
 			return fmt.Errorf("%w: %s", errNoKey, how(k))
 		}
 		return errors.New("the release list isn't signed, so the update wasn't installed")
