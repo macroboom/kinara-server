@@ -23,6 +23,7 @@ const (
 	IconWebFirefox    = "web-firefox"
 	IconWebSafari     = "web-safari"
 	IconWebEdge       = "web-edge"
+	IconWebOpera      = "web-opera"
 	IconWeb           = "web"
 )
 
@@ -76,6 +77,8 @@ func browserIcon(model string) string {
 		b = strings.ToLower(guess)
 	}
 	switch {
+	case strings.HasPrefix(b, "opera"):
+		return IconWebOpera
 	case strings.HasPrefix(b, "edge"):
 		return IconWebEdge
 	case strings.HasPrefix(b, "firefox"):
@@ -125,11 +128,13 @@ func BrowserFromUserAgent(ua string) (browser, osName string) {
 	return browser, osName
 }
 
-// knownBrowser finds a browser name in text. Order matters: Edge's agent
-// also says Chrome, and Chrome's also says Safari.
+// knownBrowser finds a browser name in text. Order matters: Opera's and
+// Edge's agents also say Chrome, and Chrome's also says Safari.
 func knownBrowser(s string) (string, bool) {
 	l := strings.ToLower(s)
 	switch {
+	case strings.Contains(l, "opr/") || strings.Contains(l, "opera"):
+		return "Opera", true
 	case strings.Contains(l, "edg"):
 		return "Edge", true
 	case strings.Contains(l, "firefox") || strings.Contains(l, "fxios"):

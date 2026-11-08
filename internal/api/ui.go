@@ -134,9 +134,12 @@ func (s *Server) uiPage(h userHandler, adminOnly bool) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
-		if adminOnly && !a.user.IsAdmin {
+		if adminOnly && (!a.user.IsAdmin || a.user.HomeOnly) {
 			http.Error(w, "admin only", http.StatusForbidden)
 			return
+		}
+		if a.user.HomeOnly {
+			a.user.IsAdmin = false
 		}
 		h(w, r, a.user)
 	}

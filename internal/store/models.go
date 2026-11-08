@@ -126,6 +126,10 @@ type User struct {
 	// ProfileID is who's watching on this session (the account's first
 	// profile unless the device picked another). Watch state belongs to it.
 	ProfileID int64 `json:"profileId"`
+	// HomeOnly: this session was made on the home network without a
+	// password. It works only from the home network and can't manage the
+	// server (see api/home.go).
+	HomeOnly bool `json:"homeOnly"`
 }
 
 // Profile is one viewer under an account.

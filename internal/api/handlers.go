@@ -39,8 +39,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if !public {
 		// The computer's name, so apps that find the server on the network
 		// can show "HOME-PC" rather than an address.
-		host, _ := os.Hostname()
-		resp["name"] = host
+		resp["name"] = s.Name()
 	}
 	if s.Remote != nil {
 		sum := remoteSummary(s.Remote.Info())

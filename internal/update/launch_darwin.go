@@ -45,7 +45,12 @@ func verify(ctx context.Context, kind, path string) error {
 // only root can change, checks that copy (checksum, Macroboom's signature,
 // notarization) and installs that copy, not the original. Both are deleted
 // when it ends, whatever happened.
-func launch(kind, path, version, sha, dir string, ended func(error)) error {
+//
+// It always asks for the password, so with prompt false it does nothing.
+func launch(kind, path, version, sha, dir string, prompt bool, ended func(error)) error {
+	if !prompt {
+		return ErrNeedsPrompt
+	}
 	if _, err := hex.DecodeString(sha); err != nil || len(sha) != 64 {
 		return errors.New("the release list gives no usable checksum")
 	}

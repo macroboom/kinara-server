@@ -73,6 +73,8 @@ type Server struct {
 
 	// playing is what each device last reported playing.
 	playing nowPlaying
+	// name is the owner's name for this server (see Name).
+	name serverName
 	// LANPort is the plain HTTP port the server listens on, for addresses a
 	// Chromecast on the home network can reach (see cast.go).
 	LANPort int
@@ -164,6 +166,7 @@ func (s *Server) Handler() http.Handler {
 	// Public.
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
+	mux.HandleFunc("POST /api/v1/auth/home", s.homeSignIn)
 	mux.HandleFunc("POST /api/v1/auth/cloud", s.cloudSignIn)
 	mux.HandleFunc("GET /api/v1/auth/accounts", s.accounts)
 	mux.HandleFunc("POST /api/v1/auth/signup", s.signup)
@@ -179,7 +182,7 @@ func (s *Server) Handler() http.Handler {
 	// Signed in.
 	mux.Handle("POST /api/v1/auth/logout", s.user(s.logout))
 	mux.Handle("GET /api/v1/auth/quick/{code}", s.user(s.quickInfoHandler))
-	mux.Handle("POST /api/v1/auth/quick/approve", s.user(s.quickApprove))
+	mux.Handle("POST /api/v1/auth/quick/approve", s.signedIn(s.quickApprove))
 	mux.Handle("GET /api/v1/me", s.user(s.me))
 	mux.Handle("GET /api/v1/libraries", s.user(s.listLibraries))
 	mux.Handle("GET /api/v1/items", s.user(s.listItems))
@@ -274,6 +277,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/remote/unblock", s.admin(s.remoteUnblock))
 	mux.Handle("GET /api/v1/settings", s.admin(s.getSettings))
 	mux.Handle("PUT /api/v1/settings", s.admin(s.putSettings))
+	mux.Handle("PUT /api/v1/settings/home-pin", s.admin(s.setHomePIN))
 
 	// Integrations (webhooks, incoming hooks, API keys) and requests.
 	s.integrationRoutes(mux)
@@ -310,6 +314,20 @@ func (s *Server) userQuery(h userHandler) http.Handler {
 	return s.authenticate(h, false, true)
 }
 
+// signedIn wraps a handler that needs a full sign-in (a password or a
+// Kinara account), not a home-network one: approving another device's
+// sign-in, for one.
+func (s *Server) signedIn(h userHandler) http.Handler {
+	return s.user(func(w http.ResponseWriter, r *http.Request, u store.User) {
+		if u.HomeOnly {
+			homeOnlyRefusal(w, http.StatusForbidden, "password_needed",
+				"sign in with your password or Kinara account on this device to do that")
+			return
+		}
+		h(w, r, u)
+	})
+}
+
 func tokenFrom(r *http.Request, allowQuery bool) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
@@ -331,21 +349,42 @@ func tokenFrom(r *http.Request, allowQuery bool) string {
 
 // lookup resolves a request's token to a user, sliding the session's expiry.
 func (s *Server) lookup(r *http.Request, allowQuery bool) (authed, bool) {
+	a, why := s.lookupWhy(r, allowQuery)
+	return a, why == ""
+}
+
+// Why a request's sign-in doesn't count (lookupWhy).
+const (
+	signedOut = "signed_out"
+	// homeOnly: a home-network session (see home.go) used from elsewhere.
+	homeOnly = "home_only"
+)
+
+// lookupWhy is lookup, saying why when the sign-in doesn't count.
+func (s *Server) lookupWhy(r *http.Request, allowQuery bool) (authed, string) {
 	tok := tokenFrom(r, allowQuery)
 	if tok == "" {
-		return authed{}, false
+		return authed{}, signedOut
 	}
 	hash := auth.HashToken(tok)
 	u, expires, lastSeen, err := s.Store.SessionUser(r.Context(), hash)
 	nowT := time.Now()
 	if err != nil || expires < nowT.Unix() {
-		return authed{}, false
+		return authed{}, signedOut
+	}
+	if u.HomeOnly && !homeNetwork(r) {
+		return authed{}, homeOnly
+	}
+	// Every profile it could watch as has a PIN (the one it picked was
+	// deleted): sign in again, which asks for one.
+	if u.HomeOnly && u.ProfileID == 0 {
+		return authed{}, signedOut
 	}
 	if nowT.Unix()-lastSeen > int64(sessionRefresh.Seconds()) {
 		_ = s.Store.TouchSession(r.Context(), hash, nowT.Add(sessionTTL).Unix())
 	}
 	s.noteNode(r, hash)
-	return authed{user: u, tokenHash: hash}, true
+	return authed{user: u, tokenHash: hash}, ""
 }
 
 func (s *Server) authenticate(h userHandler, adminOnly, allowQuery bool) http.Handler {
@@ -354,14 +393,31 @@ func (s *Server) authenticate(h userHandler, adminOnly, allowQuery bool) http.Ha
 		if s.serveAPIKey(w, r, h) {
 			return
 		}
-		a, ok := s.lookup(r, allowQuery)
-		if !ok {
+		a, why := s.lookupWhy(r, allowQuery)
+		if why == homeOnly {
+			homeOnlyRefusal(w, http.StatusUnauthorized, homeOnly,
+				"this device signed in on the home network; away from home, sign in with your Kinara account")
+			return
+		}
+		if why != "" {
 			writeErr(w, http.StatusUnauthorized, "sign in required")
 			return
 		}
 		if adminOnly && !a.user.IsAdmin {
 			writeErr(w, http.StatusForbidden, "admin only")
 			return
+		}
+		// Managing the server needs the owner's password or Kinara account,
+		// not a pick on the home network.
+		if adminOnly && a.user.HomeOnly {
+			homeOnlyRefusal(w, http.StatusForbidden, "owner_sign_in",
+				"sign in with the owner's password or Kinara account to manage the server")
+			return
+		}
+		// Handlers that do more for owners (everyone's requests,
+		// downloads, subtitles) treat a home sign-in as anyone else's.
+		if a.user.HomeOnly {
+			a.user.IsAdmin = false
 		}
 		r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, a))
 		h(w, r, a.user)

@@ -6,6 +6,7 @@ func TestClientIconAndLabel(t *testing.T) {
 	const chromeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 	const edgeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36 Edg/129.0"
 	const safariUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+	const operaUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36 OPR/114.0"
 	const firefoxUA = "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0"
 	cases := []struct {
 		name  string
@@ -33,6 +34,8 @@ func TestClientIconAndLabel(t *testing.T) {
 		{"web edge", Client{Platform: "web", Model: "Edge on Windows"}, IconWebEdge, "Edge on Windows"},
 		{"web safari", Client{Platform: "web", Model: "Safari on Mac"}, IconWebSafari, "Safari on Mac"},
 		{"web firefox", Client{Platform: "web", Model: "Firefox on Linux"}, IconWebFirefox, "Firefox on Linux"},
+		{"web opera", Client{Platform: "web", Model: "Opera on Windows"}, IconWebOpera, "Opera on Windows"},
+		{"old session opera", Client{Name: operaUA}, IconWebOpera, "Opera on Windows"},
 		{"web unknown", Client{Platform: "web", Model: "Browser"}, IconWeb, "Browser"},
 		{"web user agent chrome", Client{Platform: "web", Model: chromeUA}, IconWebChrome, chromeUA},
 		{"old session chrome", Client{Name: chromeUA}, IconWebChrome, "Chrome on Windows"},

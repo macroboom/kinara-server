@@ -61,6 +61,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # A release built without the release key can't install the next
+      # release itself, so every copy of it would need updating by hand.
+      - name: Release key built in
+        if: env.PUBLISH == 'true'
+        run: |
+          grep -v '^#' internal/update/update-key.pub | grep -Eq '^[A-Za-z0-9+/]{43}=$' ||
+            { echo "internal/update/update-key.pub has no release key: commit the public key first (see packaging/publish-downloads.sh)" >&2; exit 1; }
       - name: Check out kinara-web (private)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

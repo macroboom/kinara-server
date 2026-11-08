@@ -121,7 +121,9 @@ components:
         kind: { type: string, enum: [windows, macos, deb, docker, other], description: How this copy was installed }
         canInstall: { type: boolean, description: Kinara can install the update itself (Windows and macOS installs) }
         how: { type: string, description: "What to do when it can't: the apt or docker command, or where to download" }
-        state: { type: string, enum: [idle, downloading, verifying, installing, failed] }
+        state: { type: string, enum: [idle, downloading, verifying, ready, installing, failed], description: "ready: downloaded and checked ahead, waiting to be installed" }
+        needsPrompt: { type: boolean, description: Installing on its own was tried and needs permission on the server's computer, so it waits for a click }
+        unattended: { type: boolean, description: This kind of install can go in with nobody there (Windows can try; a Mac always asks) }
         message: { type: string, description: Why an install failed }
         downloaded: { type: integer, description: Bytes so far, while downloading }
         size: { type: integer, description: The installer's size }
@@ -162,7 +164,7 @@ components:
         icon:
           type: string
           enum: [roku, shield, google-tv, fire-tv, android-tv, apple-tv, tv, iphone, ipad, android-phone,
-            android-tablet, web-chrome, web-firefox, web-safari, web-edge, web]
+            android-tablet, web-chrome, web-firefox, web-safari, web-edge, web-opera, web]
         trusted: { type: boolean, description: Requests from this device are approved straight away }
         label: { type: string, example: "Roku · TCL 55S455" }
     Request:
@@ -222,6 +224,8 @@ components:
         username: { type: string }
         isAdmin: { type: boolean }
         createdAt: { type: integer, description: Unix seconds }
+        profileId: { type: integer, description: Who's watching on this device }
+        homeOnly: { type: boolean, description: Signed in on the home network without a password (POST /auth/home) }
     WatchState:
       type: object
       properties:
@@ -430,6 +434,39 @@ paths:
                     description: Show "Who's watching?" when there is more than one
                     items: { $ref: "#/components/schemas/Profile" }
         "401": { description: Wrong username or password }
+        "429": { description: Too many failed attempts }
+
+  /auth/home:
+    post:
+      summary: Sign in on the home network by picking an account (no password)
+      description: |
+        Only straight from the home network (not through the tunnel, the
+        relay, or a reverse proxy not named in KINARA_TRUSTED_PROXIES), and
+        only while the owner leaves homeSignIn on. The session is home only:
+        refused away from home (401, code home_only), and it can't manage
+        the server (403, code owner_sign_in) or approve another device's
+        sign-in (403, code password_needed). GET /auth/accounts says whether
+        it's offered (homeSignIn) and whether the server PIN is asked
+        (homePin).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username]
+              properties:
+                username: { type: string }
+                pin: { type: string, description: The server's home sign-in PIN, when the owner set one }
+                profileId: { type: integer, description: Who's watching; default the account's first profile without a PIN }
+                profilePin: { type: string, description: That profile's PIN, when it has one }
+                deviceName: { type: string }
+                device: { $ref: "#/components/schemas/DeviceInfo" }
+      responses:
+        "200": { description: Signed in; the same answer as /auth/login, with user.homeOnly true }
+        "401": { description: Unknown account, or wrong server PIN (code wrong_pin) }
+        "403": { description: "Not the home network (code not_home), turned off (home_sign_in_off), or a profile PIN is needed (profile_pin, with profiles) or wrong (wrong_profile_pin)" }
         "429": { description: Too many failed attempts }
 
   /auth/logout:
@@ -1713,6 +1750,21 @@ paths:
       responses:
         "204": { description: Removed }
 
+  /settings/home-pin:
+    put:
+      summary: Set or remove the PIN asked for signing in on the home network (owners only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pin: { type: string, description: 4 to 8 digits; empty removes it }
+      responses:
+        "204": { description: Saved }
+        "400": { description: Not 4 to 8 digits }
+
   /settings:
     get:
       summary: Server settings (owners only)
@@ -1727,8 +1779,12 @@ paths:
                   listAccounts: { type: boolean, description: Show accounts on the sign-in screen }
                   allowSignup: { type: boolean, description: Let anyone who reaches the server make an account }
                   priorityDevice: { type: string, description: The device that keeps its quality when the server is busy converting }
+                  serverName: { type: string, description: "What apps and the Kinara account call this server, at most 40 characters; empty uses the computer's name" }
                   updateCheck: { type: boolean, description: Check the downloads site twice a day for a newer Kinara (default on) }
+                  autoUpdate: { type: boolean, description: "Download a new release as soon as it's out and install it at night when nothing is playing, where no prompt is needed (default on)" }
                   groupCollections: { type: boolean, description: Show a franchise's movies as one card in movie libraries (default on) }
+                  homeSignIn: { type: boolean, description: "On the home network, devices sign in by picking an account, no password (default on; see /auth/home)" }
+                  hasHomePin: { type: boolean, description: A PIN is asked for that (read only; set with PUT /settings/home-pin) }
     put:
       summary: Save server settings (owners only)
       description: Fields left out keep their values.

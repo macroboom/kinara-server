@@ -32,8 +32,9 @@ const (
 // new server; /AUTOUPDATE=1 makes it also start the tray again in sign-in
 // mode. A server running as the Windows service can start it directly; one
 // running as the signed-in user (sign-in mode) asks Windows for permission,
-// which shows the usual admin prompt on that PC.
-func launch(kind, path, version, sha, dir string, ended func(error)) error {
+// which shows the usual admin prompt on that PC (not with prompt false:
+// nobody is there to answer it, so it returns ErrNeedsPrompt).
+func launch(kind, path, version, sha, dir string, prompt bool, ended func(error)) error {
 	args := []string{"/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/AUTOUPDATE=1",
 		"/LOG=" + filepath.Join(dir, "install.log")}
 	cmd := exec.Command(path, args...)
@@ -45,6 +46,9 @@ func launch(kind, path, version, sha, dir string, ended func(error)) error {
 	}
 	if !errors.Is(err, errElevationRequired) {
 		return fmt.Errorf("couldn't start the installer: %w", err)
+	}
+	if !prompt {
+		return ErrNeedsPrompt
 	}
 	params := ""
 	for _, a := range args {

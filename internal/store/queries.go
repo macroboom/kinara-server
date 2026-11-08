@@ -151,15 +151,18 @@ const (
 	qGetUser        = `SELECT id, username, password_hash, is_admin, created_at FROM users WHERE id = ?`
 	qCountUsers     = `SELECT COUNT(*) FROM users`
 	qSetPassword    = `UPDATE users SET password_hash = ? WHERE id = ?`
-	qInsertSession  = `INSERT INTO sessions (token_hash, user_id, device_name, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`
+	qInsertSession  = `INSERT INTO sessions (token_hash, user_id, device_name, created_at, last_seen_at, expires_at, home) VALUES (?, ?, ?, ?, ?, ?, ?)`
 	qGetSessionUser = `SELECT u.id, u.username, u.password_hash, u.is_admin, u.created_at, s.expires_at, s.last_seen_at,
-		COALESCE(s.profile_id, (SELECT MIN(p.id) FROM profiles p WHERE p.user_id = u.id), 0)
+		COALESCE(s.profile_id, CASE WHEN s.home = 1
+			THEN (SELECT MIN(p.id) FROM profiles p WHERE p.user_id = u.id AND p.pin_hash = '')
+			ELSE (SELECT MIN(p.id) FROM profiles p WHERE p.user_id = u.id) END, 0), s.home
 		FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?`
-	qSetSessionProfile = `UPDATE sessions SET profile_id = ? WHERE token_hash = ?`
-	qTouchSession      = `UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE token_hash = ?`
-	qDeleteSession     = `DELETE FROM sessions WHERE token_hash = ?`
-	qDeleteSessions    = `DELETE FROM sessions WHERE user_id = ?`
-	qExpireSessions    = `DELETE FROM sessions WHERE expires_at < ?`
+	qSetSessionProfile  = `UPDATE sessions SET profile_id = ? WHERE token_hash = ?`
+	qTouchSession       = `UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE token_hash = ?`
+	qDeleteSession      = `DELETE FROM sessions WHERE token_hash = ?`
+	qDeleteSessions     = `DELETE FROM sessions WHERE user_id = ?`
+	qExpireSessions     = `DELETE FROM sessions WHERE expires_at < ?`
+	qDeleteHomeSessions = `DELETE FROM sessions WHERE home = 1`
 )
 
 // Watch state.

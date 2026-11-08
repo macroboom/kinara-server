@@ -43,7 +43,11 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": cards, "allowSignup": st.AllowSignup && !remoteDevice})
+	// homeSignIn: pick an account with no password (POST /auth/home);
+	// homePin: the owner asks for a PIN for that.
+	home, pin := s.homeOptions(r, st)
+	writeJSON(w, http.StatusOK, map[string]any{"accounts": cards, "allowSignup": st.AllowSignup && !remoteDevice,
+		"homeSignIn": home, "homePin": home && pin})
 }
 
 type signupRequest struct {
@@ -268,7 +272,26 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u store.Use
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	name, err := cleanServerName(st.ServerName)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st.ServerName = name
 	if err := s.Store.PutSettings(r.Context(), st); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Turning home sign-in off signs out the devices that used it.
+	if !st.HomeSignIn {
+		if err := s.Store.DeleteHomeSessions(r.Context()); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+	s.name.set(name)
+	// HasHomePIN is read only here (PUT /settings/home-pin sets it).
+	if st, err = s.Store.GetSettings(r.Context()); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}

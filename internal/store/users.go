@@ -81,17 +81,35 @@ func (s *Store) SetPassword(ctx context.Context, userID int64, hash, keep string
 }
 
 func (s *Store) CreateSession(ctx context.Context, tokenHash string, userID int64, device string, expiresAt int64) error {
+	return s.createSession(ctx, tokenHash, userID, device, expiresAt, false)
+}
+
+// CreateHomeSession makes a home-network-only session (User.HomeOnly)
+// watching as profileID.
+func (s *Store) CreateHomeSession(ctx context.Context, tokenHash string, userID, profileID int64, device string, expiresAt int64) error {
+	if err := s.createSession(ctx, tokenHash, userID, device, expiresAt, true); err != nil {
+		return err
+	}
+	return s.SetSessionProfile(ctx, tokenHash, profileID)
+}
+
+func (s *Store) createSession(ctx context.Context, tokenHash string, userID int64, device string, expiresAt int64, home bool) error {
 	t := now()
-	_, err := s.db.ExecContext(ctx, qInsertSession, tokenHash, userID, device, t, t, expiresAt)
+	h := 0
+	if home {
+		h = 1
+	}
+	_, err := s.db.ExecContext(ctx, qInsertSession, tokenHash, userID, device, t, t, expiresAt, h)
 	return err
 }
 
 // SessionUser returns the user for a token hash, with the session's expiry
 // and last-seen time. User.ProfileID is the session's profile.
 func (s *Store) SessionUser(ctx context.Context, tokenHash string) (User, int64, int64, error) {
-	var expires, lastSeen, profile int64
-	u, err := scanUser(s.db.QueryRowContext(ctx, qGetSessionUser, tokenHash), &expires, &lastSeen, &profile)
+	var expires, lastSeen, profile, home int64
+	u, err := scanUser(s.db.QueryRowContext(ctx, qGetSessionUser, tokenHash), &expires, &lastSeen, &profile, &home)
 	u.ProfileID = profile
+	u.HomeOnly = home != 0
 	return u, expires, lastSeen, err
 }
 
@@ -108,6 +126,13 @@ func (s *Store) TouchSession(ctx context.Context, tokenHash string, expiresAt in
 
 func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
 	_, err := s.db.ExecContext(ctx, qDeleteSession, tokenHash)
+	return err
+}
+
+// DeleteHomeSessions signs out every home-network sign-in (when the owner
+// turns home sign-in off or sets a PIN for it).
+func (s *Store) DeleteHomeSessions(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, qDeleteHomeSessions)
 	return err
 }
 

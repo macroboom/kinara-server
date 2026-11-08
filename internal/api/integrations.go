@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
-	"os"
 	"slices"
 	"sync"
 	"time"
@@ -141,7 +140,7 @@ func (s *Server) serverIdentity(ctx context.Context) serverRef {
 	if ref.ID == "" {
 		ref.ID, _ = s.Store.IntegrationsServerID(ctx)
 	}
-	ref.Name, _ = os.Hostname()
+	ref.Name = s.Name()
 	if ref.Name == "" {
 		ref.Name = "Kinara"
 	}

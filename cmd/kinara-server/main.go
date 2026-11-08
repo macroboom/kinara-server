@@ -47,6 +47,8 @@
 //	                       https://cloud.kinara.media; off turns it off)
 //	KINARA_IROH            path to kinara-iroh (default: next to the server, or on PATH)
 //	KINARA_TUNNEL_LISTEN   loopback address kinara-iroh delivers connections to (default 127.0.0.1:8421)
+//	KINARA_IROH_RELAY_URLS your own iroh relays (comma-separated), for remote play without
+//	                       linking to a Kinara account; never n0's public ones
 //
 // Subtitles (also set in the web manager, under Subtitles):
 //
@@ -833,10 +835,8 @@ func startCloud(ctx context.Context, d *deps, srv *api.Server, handler http.Hand
 		ManualPort: manual,
 		NoPortMap:  env("KINARA_PORT_MAPPING", "on") == "off",
 		Version:    version,
-		Name: func() string {
-			h, _ := os.Hostname()
-			return h
-		},
+		// The owner's name for the server (Settings), else the computer's.
+		Name: srv.Name,
 	}, handler, d.log)
 	if srv.Remote != nil {
 		sc := srv.Remote
@@ -891,6 +891,8 @@ func startRemote(ctx context.Context, d *deps, srv *api.Server, handler http.Han
 			}
 			return ids, err
 		},
+		// Never n0's public relays: ours once linked, or the owner's own.
+		RequireRelays: true,
 		Allowed: func(ctx context.Context) bool {
 			n, err := d.store.CountUsers(ctx)
 			return err == nil && n > 0

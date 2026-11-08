@@ -17,6 +17,13 @@
 // the server. A build without one can check for updates but not install
 // them.
 //
+// The server can also download a release ahead (Prepare), so it's
+// checked and ready, and install it later without asking anyone
+// (Install with unattended set): at night, when nothing is playing.
+// Unattended only goes ahead where the installer needs no prompt (a
+// Windows server allowed to install programs); otherwise the download
+// stays ready for one click.
+//
 // Installing downloads the installer for this computer into the updates
 // folder (which only this account and administrators can change), checks
 // its size and SHA-256 against the signed list (and, on macOS, that
@@ -128,7 +135,15 @@ const (
 	StateVerifying   = "verifying"
 	StateInstalling  = "installing"
 	StateFailed      = "failed"
+	// StateReady is a release downloaded and checked ahead, waiting to
+	// be installed.
+	StateReady = "ready"
 )
+
+// ErrNeedsPrompt is an unattended install that would have to ask for
+// permission (an administrator password, a Windows prompt) on the
+// server's computer. The download is kept, ready for one click.
+var ErrNeedsPrompt = errors.New("installing needs permission on the server's computer")
 
 // Status is what the manager page shows.
 type Status struct {
@@ -146,9 +161,15 @@ type Status struct {
 	CanInstall bool   `json:"canInstall"`
 	How        string `json:"how,omitempty"`
 	// State is the install in progress: idle, downloading, verifying,
-	// installing or failed (Message says why).
-	State   string `json:"state"`
-	Message string `json:"message,omitempty"`
+	// ready (downloaded ahead), installing or failed (Message says why).
+	State string `json:"state"`
+	// NeedsPrompt: installing on its own was tried, and would have to ask
+	// for permission on the server's computer, so it waits for a click.
+	NeedsPrompt bool `json:"needsPrompt,omitempty"`
+	// Unattended is whether this kind of install can go in with nobody
+	// there (Windows can try; a Mac always asks for a password).
+	Unattended bool   `json:"unattended"`
+	Message    string `json:"message,omitempty"`
 	// Downloaded and Size are bytes, while downloading.
 	Downloaded int64 `json:"downloaded,omitempty"`
 	Size       int64 `json:"size,omitempty"`
@@ -183,7 +204,24 @@ type Updater struct {
 	state     string
 	message   string
 	got, size int64
+	// ready is a release downloaded and checked ahead (Prepare).
+	ready *prepared
+	// needsPrompt is the version an unattended install found needs a
+	// prompt ("" for none).
+	needsPrompt string
 }
+
+// prepared is an installer downloaded and checked, waiting.
+type prepared struct {
+	version, path, sha string
+}
+
+// Hooks for tests: whether this kind of install can be launched, and
+// launching it.
+var (
+	canLaunchHook = canLaunch
+	launchHook    = launch
+)
 
 // key is the public key release lists must be signed with (nil: none).
 func (u *Updater) key() ed25519.PublicKey {
@@ -245,7 +283,7 @@ func (u *Updater) Status() Status {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	k := u.kind()
-	st := Status{Current: u.Current, Kind: k, State: u.state, Message: u.message, Error: u.checkErr}
+	st := Status{Current: u.Current, Kind: k, State: u.state, Message: u.message, Error: u.checkErr, Unattended: unattendedKind(k)}
 	if st.State == "" {
 		st.State = StateIdle
 	}
@@ -256,7 +294,11 @@ func (u *Updater) Status() Status {
 		st.Latest, st.Date, st.Notes = r.Version, r.Date, r.Notes
 		st.Available = Newer(r.Version, u.Current)
 		_, has := r.Files[fileKey(k)]
-		st.CanInstall = st.Available && has && canLaunch(k) && !isDev(u.Current) && u.signed
+		st.CanInstall = st.Available && has && canLaunchHook(k) && !isDev(u.Current) && u.signed
+		st.NeedsPrompt = u.needsPrompt != "" && u.needsPrompt == r.Version
+		if st.State == StateReady && (u.ready == nil || u.ready.version != r.Version) {
+			st.State = StateIdle
+		}
 	}
 	if !st.CanInstall {
 		st.How = how(k)
@@ -364,45 +406,128 @@ func loopback(host string) bool {
 // ErrBusy means an install is already under way.
 var ErrBusy = errors.New("an update is already being installed")
 
-// Install downloads, checks and starts the installer for the newest release.
-// It returns once the download starts; Status follows it. The server is
-// stopped by the installer, so on success this process ends.
-func (u *Updater) Install(ctx context.Context) error {
-	u.mu.Lock()
+// unattendedKind is whether an install of this kind could go in with
+// nobody at the server's computer: the Mac installer always asks for an
+// administrator password.
+func unattendedKind(kind string) bool { return kind == KindWindows }
+
+// pick checks the newest release can be installed here and returns it and
+// its installer. Call with u.mu held.
+func (u *Updater) pick() (*Release, File, string, error) {
 	if u.state == StateDownloading || u.state == StateVerifying || u.state == StateInstalling {
-		u.mu.Unlock()
-		return ErrBusy
+		return nil, File{}, "", ErrBusy
 	}
 	r := u.release
 	k := u.kind()
 	if r == nil || !Newer(r.Version, u.Current) {
-		u.mu.Unlock()
-		return errors.New("there's no newer version to install")
+		return nil, File{}, "", errors.New("there's no newer version to install")
 	}
 	f, ok := r.Files[fileKey(k)]
-	if !ok || !canLaunch(k) || isDev(u.Current) {
-		u.mu.Unlock()
-		return errors.New("this copy of Kinara can't update itself: " + how(k))
+	if !ok || !canLaunchHook(k) || isDev(u.Current) {
+		return nil, File{}, "", errors.New("this copy of Kinara can't update itself: " + how(k))
 	}
 	if !u.signed {
-		u.mu.Unlock()
 		if u.key() == nil {
-			return fmt.Errorf("%w: %s", errNoKey, how(k))
+			return nil, File{}, "", fmt.Errorf("%w: %s", errNoKey, how(k))
 		}
-		return errors.New("the release list isn't signed, so the update wasn't installed")
+		return nil, File{}, "", errors.New("the release list isn't signed, so the update wasn't installed")
 	}
 	if err := u.checkFile(f); err != nil {
+		return nil, File{}, "", err
+	}
+	return r, f, k, nil
+}
+
+// Prepare downloads and checks the newest release ahead, so installing it
+// later is quick. It returns once the download starts; Status follows it
+// (ready when done). Already ready for that release: nothing to do.
+func (u *Updater) Prepare(ctx context.Context) error {
+	u.mu.Lock()
+	r, f, k, err := u.pick()
+	if err != nil {
 		u.mu.Unlock()
 		return err
 	}
+	if u.ready != nil && u.ready.version == r.Version && u.state == StateReady {
+		u.mu.Unlock()
+		return nil
+	}
+	if u.ready != nil {
+		// Downloaded for an older release.
+		_ = os.Remove(u.ready.path)
+		u.ready = nil
+	}
 	u.state, u.message, u.got, u.size = StateDownloading, "", 0, f.Size
+	u.mu.Unlock()
+	go func() {
+		path, err := u.fetchChecked(ctx, k, f)
+		if err != nil {
+			u.log().Warn("update: downloading ahead", "version", r.Version, "err", err)
+			u.set(StateFailed, err.Error())
+			return
+		}
+		u.mu.Lock()
+		u.ready = &prepared{version: r.Version, path: path, sha: f.SHA256}
+		u.state, u.message = StateReady, ""
+		u.mu.Unlock()
+		u.log().Info("update: downloaded and checked, ready to install", "version", r.Version)
+	}()
+	return nil
+}
+
+// fetchChecked downloads an installer and checks it.
+func (u *Updater) fetchChecked(ctx context.Context, k string, f File) (string, error) {
+	path, err := u.download(ctx, f)
+	if err != nil {
+		return "", err
+	}
+	u.set(StateVerifying, "")
+	if err := verify(ctx, k, path); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+// Install downloads (unless Prepare already did), checks and starts the
+// installer for the newest release. It returns once that starts; Status
+// follows it. The server is stopped by the installer, so on success this
+// process ends.
+//
+// unattended means nobody asked for it (the night-time install): when the
+// installer would have to ask for permission, it isn't started, the
+// download is kept ready, and Status says NeedsPrompt.
+func (u *Updater) Install(ctx context.Context, unattended ...bool) error {
+	alone := len(unattended) > 0 && unattended[0]
+	u.mu.Lock()
+	r, f, k, err := u.pick()
+	if err != nil {
+		u.mu.Unlock()
+		return err
+	}
+	if alone && !unattendedKind(k) {
+		u.mu.Unlock()
+		return ErrNeedsPrompt
+	}
+	ready := u.ready
+	if ready != nil && ready.version != r.Version {
+		_ = os.Remove(ready.path)
+		ready, u.ready = nil, nil
+	}
+	if ready != nil {
+		u.state, u.message = StateInstalling, ""
+	} else {
+		u.state, u.message, u.got, u.size = StateDownloading, "", 0, f.Size
+	}
 	u.mu.Unlock()
 
 	go func() {
-		path, err := u.download(ctx, f)
-		if err == nil {
-			u.set(StateVerifying, "")
-			err = verify(ctx, k, path)
+		path := ""
+		var err error
+		if ready != nil {
+			path = ready.path
+		} else {
+			path, err = u.fetchChecked(ctx, k, f)
 		}
 		if err == nil {
 			u.set(StateInstalling, "")
@@ -416,8 +541,8 @@ func (u *Updater) Install(ctx context.Context) error {
 			err = checkSum(path, f.SHA256)
 		}
 		if err == nil {
-			u.log().Info("update: starting the installer", "version", r.Version, "file", path)
-			err = launch(k, path, r.Version, f.SHA256, u.Dir, func(err error) {
+			u.log().Info("update: starting the installer", "version", r.Version, "file", path, "unattended", alone)
+			err = launchHook(k, path, r.Version, f.SHA256, u.Dir, !alone, func(err error) {
 				// The installer ended and we're still running: it failed or
 				// was cancelled before it stopped the server.
 				_ = os.Remove(path)
@@ -428,8 +553,22 @@ func (u *Updater) Install(ctx context.Context) error {
 				u.set(StateFailed, err.Error())
 			})
 		}
+		if errors.Is(err, ErrNeedsPrompt) {
+			// Nothing was started: keep the download for a click.
+			u.mu.Lock()
+			u.ready = &prepared{version: r.Version, path: path, sha: f.SHA256}
+			u.state, u.message, u.needsPrompt = StateReady, "", r.Version
+			u.mu.Unlock()
+			u.log().Info("update: installing needs permission on this computer; it waits for a click on the Manage page", "version", r.Version)
+			return
+		}
+		u.mu.Lock()
+		u.ready = nil
+		u.mu.Unlock()
 		if err != nil {
-			_ = os.Remove(path)
+			if path != "" {
+				_ = os.Remove(path)
+			}
 			u.log().Warn("update failed", "version", r.Version, "err", err)
 			u.set(StateFailed, err.Error())
 		}

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -273,5 +274,110 @@ func TestCheckSumAgain(t *testing.T) {
 	os.WriteFile(p, []byte("evil"), 0o600)
 	if err := checkSum(p, hex.EncodeToString(sum[:])); err == nil {
 		t.Fatal("a swapped installer passed")
+	}
+}
+
+// installSite serves a signed release list and its installer from one
+// address, for tests that install.
+func installSite(t *testing.T, key ed25519.PrivateKey, body []byte) *httptest.Server {
+	t.Helper()
+	sum := sha256.Sum256(body)
+	var env Signed
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/server/latest-signed.json":
+			json.NewEncoder(w).Encode(env)
+		case "/server/9.0.0/Kinara-Setup-9.0.0-x64.exe":
+			w.Write(body)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	rel := Release{Version: "9.0.0", Files: map[string]File{"windows-x64": {
+		Name: "Kinara-Setup-9.0.0-x64.exe", URL: srv.URL + "/server/9.0.0/Kinara-Setup-9.0.0-x64.exe",
+		Size: int64(len(body)), SHA256: hex.EncodeToString(sum[:]),
+	}}}
+	payload, _ := json.Marshal(rel)
+	env = Signed{Payload: base64.StdEncoding.EncodeToString(payload), Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(key, payload))}
+	return srv
+}
+
+// waitState waits for the updater to reach a state.
+func waitState(t *testing.T, u *Updater, want string) Status {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		if st := u.Status(); st.State == want {
+			return st
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("never reached %s: %+v", want, u.Status())
+	return Status{}
+}
+
+// Downloading ahead, then an unattended install that would need a prompt
+// keeps the download ready for a click, which then installs it.
+func TestPrepareAndUnattended(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	srv := installSite(t, priv, []byte("the installer"))
+	savedCan, savedLaunch := canLaunchHook, launchHook
+	t.Cleanup(func() { canLaunchHook, launchHook = savedCan, savedLaunch })
+	canLaunchHook = func(kind string) bool { return kind == KindWindows }
+	var mu sync.Mutex
+	var prompts []bool
+	got := func() []bool { mu.Lock(); defer mu.Unlock(); return append([]bool(nil), prompts...) }
+	launchHook = func(kind, path, version, sha, dir string, prompt bool, ended func(error)) error {
+		mu.Lock()
+		prompts = append(prompts, prompt)
+		mu.Unlock()
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("installer missing at launch: %v", err)
+		}
+		if !prompt {
+			return ErrNeedsPrompt
+		}
+		return nil
+	}
+
+	u := &Updater{URL: srv.URL + "/server/latest-signed.json", Current: "0.1.0", Dir: t.TempDir(), Kind: KindWindows, Key: pub}
+	if _, err := u.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if st := u.Status(); !st.CanInstall || !st.Unattended {
+		t.Fatalf("status %+v", st)
+	}
+	if err := u.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, u, StateReady)
+	// Again: already ready, nothing downloaded.
+	if err := u.Prepare(context.Background()); err != nil || u.Status().State != StateReady {
+		t.Fatalf("prepare again: %v %+v", err, u.Status())
+	}
+
+	if err := u.Install(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	st := waitState(t, u, StateReady)
+	if p := got(); !st.NeedsPrompt || len(p) != 1 || p[0] {
+		t.Fatalf("unattended: %+v prompts %v", st, p)
+	}
+
+	// A click installs the same download, allowed to ask.
+	if err := u.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 200 && len(got()) < 2; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if p := got(); len(p) != 2 || !p[1] {
+		t.Fatalf("click: prompts %v", p)
+	}
+
+	// A Mac never installs unattended.
+	m := &Updater{URL: u.URL, Current: "0.1.0", Dir: t.TempDir(), Kind: KindMacOS, Key: pub}
+	if st := m.Status(); st.Unattended {
+		t.Fatal("mac unattended")
 	}
 }

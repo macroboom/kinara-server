@@ -15,6 +15,9 @@ type Settings struct {
 	// AllowSignup lets anyone who can reach the server make an account from
 	// the sign-in screen. Off by default: the owner adds accounts instead.
 	AllowSignup bool `json:"allowSignup"`
+	// ServerName is what apps and the cloud call this server; "" uses the
+	// computer's name.
+	ServerName string `json:"serverName"`
 	// PriorityDevice is the device (see DeviceID) that keeps its quality
 	// when the server can't convert everything at once: other devices step
 	// down first, and it gets a slot even when all are taken. "" for none.
@@ -22,14 +25,39 @@ type Settings struct {
 	// UpdateCheck asks the downloads site twice a day whether a newer
 	// Kinara is out (it sends only this server's version and system).
 	UpdateCheck bool `json:"updateCheck"`
+	// AutoUpdate installs a new release on its own, at night when nothing
+	// is playing (Windows and macOS installs; apt and Docker update
+	// themselves their own way).
+	AutoUpdate bool `json:"autoUpdate"`
 	// GroupCollections shows movies of the same franchise (TMDB
 	// collections, like "The Lord of the Rings") as one card in movie
 	// libraries, which opens to the movies in order.
 	GroupCollections bool `json:"groupCollections"`
+	// HomeSignIn lets devices on the home network sign in by picking an
+	// account, with no password: they can watch, from home only, and
+	// can't manage the server. Off asks for the password as before.
+	HomeSignIn bool `json:"homeSignIn"`
+	// HasHomePIN says a PIN is asked for that (a shared network, a dorm).
+	// Read only here: it's set with PUT /api/v1/settings/home-pin.
+	HasHomePIN bool `json:"hasHomePin"`
+}
+
+// homePINKey holds the hash of the home sign-in PIN ("" for none).
+const homePINKey = "home_pin_hash"
+
+// HomePINHash is the home sign-in PIN's hash, "" when there's none.
+func (s *Store) HomePINHash(ctx context.Context) (string, error) {
+	v, _, err := s.setting(ctx, homePINKey)
+	return v, err
+}
+
+// SetHomePINHash sets (or, with "", removes) the home sign-in PIN.
+func (s *Store) SetHomePINHash(ctx context.Context, hash string) error {
+	return s.setSetting(ctx, homePINKey, hash)
 }
 
 // DefaultSettings applies until the owner changes something.
-var DefaultSettings = Settings{ListAccounts: true, AllowSignup: false, UpdateCheck: true, GroupCollections: true}
+var DefaultSettings = Settings{ListAccounts: true, AllowSignup: false, UpdateCheck: true, AutoUpdate: true, GroupCollections: true, HomeSignIn: true}
 
 func (s *Store) setting(ctx context.Context, key string) (string, bool, error) {
 	var v string
@@ -71,7 +99,21 @@ func (s *Store) GetSettings(ctx context.Context) (Settings, error) {
 	if out.UpdateCheck, err = s.boolSetting(ctx, "update_check", DefaultSettings.UpdateCheck); err != nil {
 		return out, err
 	}
+	if out.AutoUpdate, err = s.boolSetting(ctx, "auto_update", DefaultSettings.AutoUpdate); err != nil {
+		return out, err
+	}
 	if out.GroupCollections, err = s.boolSetting(ctx, "group_collections", DefaultSettings.GroupCollections); err != nil {
+		return out, err
+	}
+	if out.HomeSignIn, err = s.boolSetting(ctx, "home_sign_in", DefaultSettings.HomeSignIn); err != nil {
+		return out, err
+	}
+	pin, err := s.HomePINHash(ctx)
+	if err != nil {
+		return out, err
+	}
+	out.HasHomePIN = pin != ""
+	if out.ServerName, _, err = s.setting(ctx, "server_name"); err != nil {
 		return out, err
 	}
 	out.PriorityDevice, _, err = s.setting(ctx, "priority_device")
@@ -83,13 +125,22 @@ func (s *Store) PutSettings(ctx context.Context, st Settings) error {
 	if err := s.setSetting(ctx, "list_accounts", strconv.FormatBool(st.ListAccounts)); err != nil {
 		return err
 	}
+	if err := s.setSetting(ctx, "server_name", st.ServerName); err != nil {
+		return err
+	}
 	if err := s.setSetting(ctx, "priority_device", st.PriorityDevice); err != nil {
 		return err
 	}
 	if err := s.setSetting(ctx, "update_check", strconv.FormatBool(st.UpdateCheck)); err != nil {
 		return err
 	}
+	if err := s.setSetting(ctx, "auto_update", strconv.FormatBool(st.AutoUpdate)); err != nil {
+		return err
+	}
 	if err := s.setSetting(ctx, "group_collections", strconv.FormatBool(st.GroupCollections)); err != nil {
+		return err
+	}
+	if err := s.setSetting(ctx, "home_sign_in", strconv.FormatBool(st.HomeSignIn)); err != nil {
 		return err
 	}
 	return s.setSetting(ctx, "allow_signup", strconv.FormatBool(st.AllowSignup))

@@ -223,8 +223,19 @@ func (s *Server) unlockProfile(w http.ResponseWriter, r *http.Request, u store.U
 	}
 	ok := pin != "" && auth.CheckPassword(p.PinHash, pin)
 	if !ok && password != "" {
+		// The account password has its own count, which a right PIN
+		// doesn't clear: else PIN, guess, guess... would test passwords
+		// without the sign-in limit.
+		pwKey := "password:" + strconv.FormatInt(u.ID, 10)
+		if err := s.limiter.Allow(pwKey); err != nil {
+			writeErr(w, http.StatusTooManyRequests, err.Error())
+			return false
+		}
 		if full, err := s.Store.GetUser(r.Context(), u.ID); err == nil {
 			ok = auth.CheckPassword(full.PasswordHash, password)
+		}
+		if !ok {
+			s.limiter.Fail(pwKey)
 		}
 	}
 	if !ok {

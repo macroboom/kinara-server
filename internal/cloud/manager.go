@@ -77,6 +77,8 @@ type Manager struct {
 	reported time.Time
 	relayUp  int
 	wake     chan struct{}
+	// certWake wakes the certificate loop (a new link needs one now).
+	certWake chan struct{}
 	stopLink context.CancelFunc
 }
 
@@ -96,8 +98,9 @@ func New(s Settings, h http.Handler, log *slog.Logger) *Manager {
 	}
 	m := &Manager{
 		S: s, Handler: h, Log: log,
-		file: stateFile{path: filepath.Join(s.DataDir, "cloud", "state.json")},
-		wake: make(chan struct{}, 1),
+		file:     stateFile{path: filepath.Join(s.DataDir, "cloud", "state.json")},
+		wake:     make(chan struct{}, 1),
+		certWake: make(chan struct{}, 1),
 	}
 	if !s.NoPortMap {
 		m.mapper = autoMapper{
@@ -303,6 +306,7 @@ func (m *Manager) pollLink(ctx context.Context, ls linkStart, userID int64) {
 		m.Log.Info("cloud: linked", "server", s.ServerID, "account", s.Owner.Email)
 		m.relaysChanged()
 		m.poke()
+		m.pokeCert()
 		return
 	}
 }
@@ -320,7 +324,7 @@ func (m *Manager) CancelLink() {
 // Unlink forgets the account (the owner can also remove it in the cloud).
 func (m *Manager) Unlink(ctx context.Context) error {
 	m.mu.Lock()
-	m.state, m.cert, m.last = nil, nil, nil
+	m.state, m.cert, m.last, m.certErr = nil, nil, nil, ""
 	mp := m.mapping
 	m.mapping = nil
 	m.mu.Unlock()
@@ -513,6 +517,15 @@ func (m *Manager) certDue() bool {
 	return m.cert == nil || m.cert.Leaf == nil || time.Until(m.cert.Leaf.NotAfter) < 30*24*time.Hour
 }
 
+// pokeCert wakes the certificate loop, so a new link gets its
+// certificate now rather than at the loop's next check (hours away).
+func (m *Manager) pokeCert() {
+	select {
+	case m.certWake <- struct{}{}:
+	default:
+	}
+}
+
 func (m *Manager) certLoop(ctx context.Context) {
 	wait := 5 * time.Second
 	for {
@@ -520,6 +533,7 @@ func (m *Manager) certLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
+		case <-m.certWake:
 		}
 		if m.S.HTTPSPort == 0 {
 			return

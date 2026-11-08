@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -272,4 +273,39 @@ func TestSidecarWaitsForAdmin(t *testing.T) {
 	go s.Run(ctx)
 	s.Configure(true, 0)
 	waitFor(t, "waiting", func() bool { return s.Info().State == StateWaiting })
+}
+
+func TestSidecarWaitsForRelays(t *testing.T) {
+	exe, _ := os.Executable()
+	t.Setenv("KINARA_FAKE_IROH", "1")
+	t.Setenv("KINARA_IROH_RELAY_URLS", "")
+	var relays []string
+	var mu sync.Mutex
+	s := &Sidecar{Bin: exe, DataDir: t.TempDir(), Target: "127.0.0.1:8421", RequireRelays: true,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	s.SetRelays(func() []string { mu.Lock(); defer mu.Unlock(); return relays })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.Run(ctx)
+	s.Configure(true, 0)
+	// Not linked: it waits instead of using the public relays.
+	waitFor(t, "waiting", func() bool { in := s.Info(); return in.State == StateWaiting && in.Error == NeedsRelay })
+	// Linked: it starts on ours.
+	mu.Lock()
+	relays = []string{"https://iroh.relay.example.com:8443"}
+	mu.Unlock()
+	s.Reload()
+	waitFor(t, "ready", func() bool { return s.Info().State == StateReady })
+}
+
+func TestSidecarOwnRelay(t *testing.T) {
+	t.Setenv("KINARA_IROH_RELAY_URLS", "https://relay.example.net")
+	s := &Sidecar{RequireRelays: true}
+	if got := s.wantedRelays(); got != "https://relay.example.net" {
+		t.Fatalf("own relay: %q", got)
+	}
+	s.SetRelays(func() []string { return []string{"https://ours"} })
+	if got := s.wantedRelays(); got != "https://ours" {
+		t.Fatalf("linked: %q", got)
+	}
 }

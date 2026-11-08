@@ -55,7 +55,12 @@ type Sidecar struct {
 	Blocked func(ctx context.Context) ([]string, error)
 	// Allowed says whether it may run now (false until an admin exists).
 	Allowed func(ctx context.Context) bool
-	Log     *slog.Logger
+	// RequireRelays keeps it off n0's public relays: it waits until it has
+	// our relays (the server is linked to a Kinara account) or the owner's
+	// own (KINARA_IROH_RELAY_URLS). The public relays are shared and rate
+	// limited, made for trying iroh out, not for streaming.
+	RequireRelays bool
+	Log           *slog.Logger
 
 	// relayURLs gives the self-hosted iroh relays to use instead of the
 	// public ones (nil or empty: the public ones). Set with SetRelays; read
@@ -144,16 +149,23 @@ func (s *Sidecar) SetRelays(f func() []string) {
 	s.mu.Unlock()
 }
 
-// wantedRelays is the relay list to launch with, joined ("" for the public ones).
+// wantedRelays is the relay list to launch with, joined ("" for the public
+// ones): ours once linked, else the owner's own relays from
+// KINARA_IROH_RELAY_URLS.
 func (s *Sidecar) wantedRelays() string {
 	s.mu.Lock()
 	f := s.relayURLs
 	s.mu.Unlock()
-	if f == nil {
-		return ""
+	if f != nil {
+		if list := f(); len(list) > 0 {
+			return strings.Join(list, ",")
+		}
 	}
-	return strings.Join(f(), ",")
+	return strings.TrimSpace(os.Getenv("KINARA_IROH_RELAY_URLS"))
 }
+
+// NeedsRelay is the waiting message while RequireRelays holds it back.
+const NeedsRelay = "Link this server to your Kinara account to use remote play (Remote access, Kinara account), or set KINARA_IROH_RELAY_URLS to your own iroh relay."
 
 // Reload restarts a running sidecar so it picks up settings it only reads
 // when it starts (the relays to use). It does nothing when the running one
@@ -318,6 +330,10 @@ func (s *Sidecar) Run(ctx context.Context) {
 		case s.Allowed != nil && !s.Allowed(ctx):
 			s.setState(StateWaiting, "Create the admin account first.")
 			wait = 10 * time.Second
+		case s.RequireRelays && s.wantedRelays() == "":
+			// Woken by Reload when the server is linked.
+			s.setState(StateWaiting, NeedsRelay)
+			wait = 30 * time.Second
 		default:
 			bin := s.Bin
 			if bin == "" {

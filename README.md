@@ -26,6 +26,17 @@ The Linux package and image, how to install them, and how releases are
 made: [packaging/linux/README.md](packaging/linux/README.md). The rest of
 this file is for running the server from source.
 
+**Updates.** The server checks for a new release twice a day. On Windows
+and macOS, with "Install updates automatically" on (Manage, Updates; the
+default), it downloads and checks a new release as soon as it's out, then
+installs it between 2:00 and 5:00 server time when nothing is playing,
+after a backup. Where installing would need a prompt on the server's
+computer (macOS's administrator password; on Windows, a server running as
+the signed-in user), the download waits, ready, for one click on that page.
+apt and Docker installs are updated with `apt` and `docker` as usual.
+Installing needs a release built with Kinara's release key
+(`internal/update/update-key.pub`); a release without one stops in CI.
+
 ## Requirements
 
 - Go (the version in `go.mod`)
@@ -105,6 +116,40 @@ iroh tunnel) can't create accounts or set the server up.
 | `KINARA_PUBLIC_PORT` | none | A port you forwarded on the router to `KINARA_HTTPS_PORT` |
 | `KINARA_PORT_MAPPING` | `on` | `off` stops UPnP / NAT-PMP |
 | `KINARA_TRUSTED_PROXIES` | none | Reverse proxies in front of the server (`127.0.0.1`, `10.0.0.0/8`): their `X-Forwarded-For` names the visitor |
+| `KINARA_IROH_RELAY_URLS` | none | Your own iroh relays (comma-separated), for remote play without a Kinara account |
+
+**Remote play needs a relay of ours or yours.** The tunnel (Remote access)
+waits until the server is linked to a Kinara account, which hands it the
+Kinara relays, or `KINARA_IROH_RELAY_URLS` names your own. It never uses
+n0's public iroh relays: they're shared and rate limited, made for trying
+iroh out rather than streaming films.
+
+### Signing in on the home network
+
+On the home network, a TV or phone signs in by picking an account from the
+list, with no password (`POST /api/v1/auth/home`). The owner can turn this
+off (settings, `homeSignIn`) or ask for a 4 to 8 digit PIN first, for a
+network that isn't private (`PUT /api/v1/settings/home-pin`); both are on
+the manager's Settings page. A profile with
+a PIN still needs its PIN. Such a sign-in is home only: it stops working
+away from home (sign in with a Kinara account there), and it can't manage
+the server or approve another device's sign-in; those need the owner's
+password or Kinara account.
+
+"The home network" means the request came straight from a private address
+(10/8, 172.16/12, 192.168/16, fc00::/7, link-local, or Tailscale's 100.64/10;
+not this computer itself, and not a public IPv6 address): not through the
+tunnel or relay, not through a reverse proxy missing from
+`KINARA_TRUSTED_PROXIES` (it would make every visitor look local), and, in a
+container, not from the container network's gateway. With Docker, use host
+networking (as the compose file does) so the server sees each device's own
+address; on Docker Desktop (Mac, Windows) every connection comes from the
+gateway, so home sign-in isn't offered there and devices use passwords.
+Behind a reverse proxy or port forwarder that doesn't add `X-Forwarded-For`
+(nginx's default `proxy_pass`, a TCP forwarder), name it in
+`KINARA_TRUSTED_PROXIES` or turn home sign-in off: the server can't tell its
+visitors apart otherwise. Turning it off, or setting a new PIN, signs out the
+devices that came in without a password.
 
 **On a public address** (a VPS, a forwarded port, or behind a reverse proxy
 listed in `KINARA_TRUSTED_PROXIES`), visitors from public addresses are
