@@ -319,6 +319,11 @@ func waitState(t *testing.T, u *Updater, want string) Status {
 // Downloading ahead, then an unattended install that would need a prompt
 // keeps the download ready for a click, which then installs it.
 func TestPrepareAndUnattended(t *testing.T) {
+	// The release lists a Windows installer for x64 only; on another
+	// processor (the arm64 Linux build) there's nothing to install.
+	if fileKey(KindWindows) != "windows-x64" {
+		t.Skip("the test release has an installer for x64 Windows only")
+	}
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	srv := installSite(t, priv, []byte("the installer"))
 	savedCan, savedLaunch := canLaunchHook, launchHook
