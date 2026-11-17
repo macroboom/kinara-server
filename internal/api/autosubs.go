@@ -451,6 +451,7 @@ func (s *Server) autoSubsPlaying(versionID string) {
 	s.auto.playing[versionID] = time.Now()
 	s.auto.mu.Unlock()
 	go s.planOne(s.BaseCtx, versionID, true)
+	go s.timingPlaying(s.BaseCtx, versionID)
 }
 
 // --- Finding --------------------------------------------------------------------------
@@ -695,7 +696,7 @@ func (s *Server) findSubtitle(ctx context.Context, w store.SubtitleWant) (found 
 			continue
 		}
 		f.TimingScale, f.TimingOffsetMS, f.SyncState = timing.Scale, timing.OffsetMS, state
-		if err := s.Store.SetSubtitleTiming(ctx, f.ID, timing.Scale, timing.OffsetMS, state); err != nil {
+		if err := s.Store.SetSubtitleTiming(ctx, f.ID, timing.Scale, timing.OffsetMS, state, ""); err != nil {
 			return false, err.Error(), true
 		}
 		s.Log.Info("auto subtitles: found", "file", v.RelPath, "language", w.Language, "service", c.provider.Name(),
@@ -850,6 +851,10 @@ func (s *Server) speechFor(ctx context.Context, v store.Version, language string
 	if s.Subtitles == nil || s.Subtitles.Tool == nil || !s.Subtitles.Tool.Caps().Found {
 		return nil, errors.New("ffmpeg isn't available")
 	}
+	// One read per film: a second check waits and finds it cached.
+	lock := s.speechLock(v.ID)
+	lock.Lock()
+	defer lock.Unlock()
 	streams, err := s.Store.Streams(ctx, v.ID)
 	if err != nil {
 		return nil, err
@@ -890,36 +895,6 @@ func (s *Server) speechDir() string {
 		return filepath.Join(s.CacheDir, "speech")
 	}
 	return filepath.Join(s.DataDir, "cache", "speech")
-}
-
-// syncSubtitleFile checks a subtitle someone downloaded by hand against
-// the speech and keeps the timing correction (in the background).
-func (s *Server) syncSubtitleFile(versionID string, fileID int64) {
-	ctx, cancel := context.WithTimeout(s.BaseCtx, 15*time.Minute)
-	defer cancel()
-	v, err := s.Store.GetVersion(ctx, versionID)
-	if err != nil {
-		return
-	}
-	f, err := s.Store.SubtitleFile(ctx, fileID)
-	if err != nil {
-		return
-	}
-	fi, err := os.Stat(s.dataPath(f.Path))
-	if err != nil {
-		return
-	}
-	vtt, err := s.Subtitles.VTTFile(ctx, fmt.Sprintf("%s-x%d", v.ID, f.ID), s.dataPath(f.Path), fi.ModTime().Unix())
-	if err != nil {
-		return
-	}
-	speech, speechErr := s.speechFor(ctx, v, f.Language)
-	state, timing, verdict := s.checkTiming(vtt, speech, speechErr, time.Duration(v.DurationSec*float64(time.Second)), f.Forced)
-	if verdict == "no_match" {
-		// Picked by hand: kept, but say it didn't line up.
-		state = "no_match"
-	}
-	_ = s.Store.SetSubtitleTiming(ctx, f.ID, timing.Scale, timing.OffsetMS, state)
 }
 
 // --- Routes ----------------------------------------------------------------------------
@@ -1081,6 +1056,8 @@ func (s *Server) CheckSubtitleAccount(ctx context.Context) {
 // AutoSubsAfterScan plans new files after a scan.
 func (s *Server) AutoSubsAfterScan() {
 	go s.planAutoSubs(s.BaseCtx)
+	// New files next to videos, edited ones, new releases: their timing too.
+	s.replanTiming()
 }
 
 // subtitleTiming is a subtitle file's correction, for serving.

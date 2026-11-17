@@ -120,17 +120,22 @@ type presenceOut struct {
 	MappedPort int      `json:"mappedPort"`
 	IrohTicket string   `json:"irohTicket"`
 	IrohNode   string   `json:"irohNode"`
+	// WebPlay says whether browsers may watch away from home (the
+	// cloud's watch page). Servers that leave it out don't support it.
+	WebPlay *bool `json:"webPlay,omitempty"`
 }
 
 // accessClaims is what a cloud access token says (see kinara-cloud's
 // tokens package).
 type accessClaims struct {
-	Type      string `json:"typ"`
-	Subject   string `json:"sub"`
-	Email     string `json:"email"`
-	Name      string `json:"name"`
-	Server    string `json:"sid"`
-	Role      string `json:"role"`
+	Type    string `json:"typ"`
+	Subject string `json:"sub"`
+	Email   string `json:"email"`
+	Name    string `json:"name"`
+	Server  string `json:"sid"`
+	Role    string `json:"role"`
+	// Web: a pass from the cloud's watch page, for a web browser.
+	Web       bool   `json:"web,omitempty"`
 	ExpiresAt int64  `json:"exp"`
 	KeyID     string `json:"kid"`
 }

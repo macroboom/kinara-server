@@ -1,16 +1,75 @@
 openapi: 3.1.0
 info:
   title: Kinara Server API
-  version: 0.1.0
+  version: "0.2"
   description: |
-    JSON API used by the Kinara apps. Sign in with POST /auth/login and send
-    the returned token as `Authorization: Bearer <token>` on every request.
-    Stream and image URLs also accept `?token=<token>` so plain players such
-    as VLC can open them.
+    The JSON API every Kinara app uses: the phone, TV, Roku and web apps do
+    nothing you can't do with it. Your own server publishes this document at
+    /openapi.yaml, so it always matches the version you run.
+
+    **Base address.** http://<server>:8420/api/v1 on your network (the
+    server's HTTPS port and the Kinara account addresses work the same).
+
+    **Signing in.** POST /auth/login with a user name and password returns a
+    token; send it as `Authorization: Bearer <token>`. Stream, image and
+    subtitle URLs also take `?token=<token>`, so plain players such as VLC can
+    open them. Other ways in: POST /auth/home (pick an account on the home
+    network, no password), POST /auth/quick/* (a code approved on another
+    device) and POST /auth/cloud (a Kinara account, from anywhere). A session
+    stays valid while it's used.
+
+    **API keys.** For scripts and services, an owner makes a key in the
+    manager (Integrations, API keys). A key (kn_live_...) is sent the same way
+    as a token, reaches only the operations marked with a key scope here, and
+    only those its scopes allow.
+
+    **Who may call what.** Each operation says so in x-kinara-access: public
+    (no sign-in), user (any signed-in account), user-full (signed in with a
+    password or Kinara account, not a home-network sign-in) or owner.
+
+    **Errors.** Failures answer `{"error": "<what went wrong>"}` with a
+    fitting status, sometimes with a `code` to act on (home_only,
+    password_needed, wrong_pin, profile_pin). 401 means the token is missing
+    or ended; 403, not allowed for this account; 429, too many tries (sign-in
+    and PIN attempts are limited per address and per account).
+
+    **Webhooks.** The server can POST events to your own URL (Integrations,
+    Webhooks). Each delivery carries X-Kinara-Event, X-Kinara-Delivery,
+    X-Kinara-Timestamp and X-Kinara-Signature: `sha256=` and the hex HMAC-SHA256
+    of "<timestamp>.<body>" with the webhook's secret. GET
+    /integrations/events lists every event.
 servers:
   - url: /api/v1
 security:
   - bearer: []
+
+tags:
+  - name: "Server"
+    description: "Health, setup, settings, updates, backups and metrics."
+  - name: "Sign-in and accounts"
+    description: "Signing in (password, home network, Kinara account, codes), accounts and profiles."
+  - name: "Devices"
+    description: "Signed-in devices and what they report."
+  - name: "Libraries"
+    description: "Library folders and scans."
+  - name: "Titles"
+    description: "Movies, shows, seasons, episodes and franchises: browsing, search, details, artwork and editing."
+  - name: "Playback"
+    description: "Streaming, conversion, progress and seek previews."
+  - name: "Subtitles"
+    description: "Subtitle tracks, search and the automatic finder."
+  - name: "Discover and requests"
+    description: "Trending titles, TMDB lookups and requests for titles not on the server."
+  - name: "Lists"
+    description: "Watchlists and other lists."
+  - name: "Downloads"
+    description: "Copies prepared for watching offline on phones."
+  - name: "Watch parties"
+    description: "Playing in sync on several devices."
+  - name: "Remote access"
+    description: "The tunnel, the Kinara account link and blocked devices."
+  - name: "Integrations"
+    description: "Webhooks, incoming updates, title status and API keys."
 
 components:
   securitySchemes:
@@ -91,6 +150,18 @@ components:
         source: { type: string, enum: [sidecar, download] }
         url: { type: string, description: The WebVTT }
         removable: { type: boolean, description: A download this account may delete }
+        provider: { type: string, description: The service a download came from }
+        auto: { type: boolean, description: The server found it by itself (automatic subtitles) }
+        sync:
+          type: string
+          enum: ["", synced, already, unchecked, no_match]
+          description: >
+            How checking it against the film's speech went. Every subtitle file is checked, ones next
+            to the video and downloads alike: synced (its timing is corrected when served), already
+            (it was right), unchecked (there was no speech to compare with), no_match (it doesn't seem
+            to line up; served as it is), "" (not checked yet). Checked again when the file or the
+            video changes.
+        wrongable: { type: boolean, description: It can be reported as wrong (downloads) }
     SubtitleResult:
       type: object
       properties:
@@ -385,6 +456,8 @@ components:
 paths:
   /health:
     get:
+      tags: ["Server"]
+      x-kinara-access: public
       summary: Server status (no sign-in needed)
       security: []
       responses:
@@ -397,7 +470,7 @@ paths:
                 properties:
                   ok: { type: boolean }
                   product: { type: string, description: 'Always "kinara", so apps scanning the network can recognise the server' }
-                  name: { type: string, description: The computer's name }
+                  name: { type: string, description: "The server's name (set in Settings, else the computer's name)" }
                   version: { type: string }
                   setupDone: { type: boolean }
                   metadata: { type: boolean, description: Whether a TMDB key is set }
@@ -405,6 +478,8 @@ paths:
 
   /auth/login:
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: public
       summary: Sign in a device
       security: []
       requestBody:
@@ -438,6 +513,8 @@ paths:
 
   /auth/home:
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: public
       summary: Sign in on the home network by picking an account (no password)
       description: |
         Only straight from the home network (not through the tunnel, the
@@ -471,12 +548,16 @@ paths:
 
   /auth/logout:
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user
       summary: Sign this device out
       responses:
         "204": { description: Signed out }
 
   /me:
     get:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user
       summary: The signed-in user
       responses:
         "200":
@@ -487,6 +568,9 @@ paths:
 
   /libraries:
     get:
+      tags: ["Libraries"]
+      x-kinara-access: user
+      x-kinara-key-scope: "library:read"
       summary: Libraries with counts and scan status
       responses:
         "200":
@@ -497,6 +581,8 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Library" }
     post:
+      tags: ["Libraries"]
+      x-kinara-access: owner
       summary: Add a library and start its first scan (admin)
       requestBody:
         required: true
@@ -515,6 +601,8 @@ paths:
 
   /libraries/{id}:
     patch:
+      tags: ["Libraries"]
+      x-kinara-access: owner
       summary: Rename a library (admin)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -535,6 +623,8 @@ paths:
         "400": { description: Empty or too long name }
         "404": { description: No such library }
     delete:
+      tags: ["Libraries"]
+      x-kinara-access: owner
       summary: Remove a library (admin). Files are not touched.
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -543,6 +633,8 @@ paths:
 
   /libraries/{id}/folders:
     post:
+      tags: ["Libraries"]
+      x-kinara-access: owner
       summary: Add a folder to a library and scan it (admin)
       description: >
         The folder can't be one a library already has, or sit inside or around
@@ -567,6 +659,8 @@ paths:
         "400": { description: Invalid or overlapping folder }
         "404": { description: No such library }
     delete:
+      tags: ["Libraries"]
+      x-kinara-access: owner
       summary: Take a folder out of a library (admin)
       description: >
         Kinara forgets the files in it; nothing on disk is touched. Titles left
@@ -592,6 +686,8 @@ paths:
 
   /subtitles/{versionId}/search:
     get:
+      tags: ["Subtitles"]
+      x-kinara-access: user
       summary: Search OpenSubtitles for a movie's or episode's subtitles
       description: |
         By the title's TMDB ID (an episode's show, season and episode) and
@@ -614,6 +710,8 @@ paths:
 
   /subtitles/{versionId}/download:
     post:
+      tags: ["Subtitles"]
+      x-kinara-access: user
       summary: Download a search result and keep it with the file, for everyone
       parameters:
         - { name: versionId, in: path, required: true, schema: { type: string } }
@@ -640,6 +738,8 @@ paths:
 
   /subtitles/{versionId}/files/{index}:
     delete:
+      tags: ["Subtitles"]
+      x-kinara-access: user
       summary: Remove a downloaded subtitle (owners, or whoever downloaded it)
       parameters:
         - { name: versionId, in: path, required: true, schema: { type: string } }
@@ -650,10 +750,14 @@ paths:
 
   /subtitles/settings:
     get:
+      tags: ["Subtitles"]
+      x-kinara-access: owner
       summary: Subtitle settings (owners only)
       responses:
-        "200": { description: "everyone, cleanDvd, username, hasPassword, apiKey (last 4), available" }
+        "200": { description: "everyone, cleanDvd, username, hasPassword, apiKey (last 4), available, auto, budget, checkTiming, providers" }
     put:
+      tags: ["Subtitles"]
+      x-kinara-access: owner
       summary: Change subtitle settings (owners only)
       description: Fields left out keep their values. A changed account is tried at once; account says how that went.
       requestBody:
@@ -667,11 +771,21 @@ paths:
                 username: { type: string, description: OpenSubtitles account, for more downloads a day ("" removes it) }
                 password: { type: string }
                 apiKey: { type: string, description: Your own OpenSubtitles API key ("" for Kinara's) }
+                auto: { type: boolean, description: Find subtitles by themselves in the profiles' languages (default on) }
+                budget: { type: integer, description: How many automatic downloads a day (0 to 1000) }
+                checkTiming:
+                  type: boolean
+                  description: >
+                    Check every subtitle file in the library against the speech in the background, one
+                    film at a time while nobody is watching (default on). Off, only the subtitles of files
+                    someone plays, and ones someone downloads, are checked.
       responses:
         "200": { description: Saved }
 
   /subtitles/{versionId}/{index}/pgs:
     get:
+      tags: ["Subtitles"]
+      x-kinara-access: user
       summary: A Blu-ray (PGS) subtitle track as timed pictures, for the app to draw over the video
       description: >
         The first request starts reading the track (just that track is copied out of the file;
@@ -719,6 +833,8 @@ paths:
 
   /subtitles/{versionId}/{index}/pgs/{n}.png:
     get:
+      tags: ["Subtitles"]
+      x-kinara-access: user
       summary: One picture of a PGS track
       parameters:
         - { name: versionId, in: path, required: true, schema: { type: string } }
@@ -728,8 +844,29 @@ paths:
         "200": { description: PNG with transparency }
         "404": { description: Not made (yet) }
 
+  /connection:
+    get:
+      tags: ["Playback"]
+      x-kinara-access: user
+      summary: How this player reaches the server, and its video cap
+      description: >
+        Through Kinara's relay (a browser on a network that blocks the server's own address),
+        video is held to the owner's relayMaxKbps: players plan for it from the start. The
+        server enforces it either way.
+      responses:
+        "200":
+          description: The connection
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  via: { type: string, enum: [relay, internet, home] }
+                  maxBitrate: { type: integer, description: The video cap in kbit/s (0 for none) }
   /playback/advice:
     get:
+      tags: ["Playback"]
+      x-kinara-access: user
       summary: Whether a player should step its quality down
       description: >
         Players ask every few seconds while the server converts for them. "lower" means the
@@ -754,12 +891,17 @@ paths:
 
   /playback:
     get:
+      tags: ["Playback"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "activity:read"
       summary: What each device is playing now, with its conversion's speed (admin)
       responses:
         "200": { description: List of devices playing }
 
   /devices:
     get:
+      tags: ["Devices"]
+      x-kinara-access: owner
       summary: Signed-in devices (admin)
       responses:
         "200":
@@ -770,6 +912,8 @@ paths:
 
   /devices/{id}:
     delete:
+      tags: ["Devices"]
+      x-kinara-access: owner
       summary: Sign a device out (admin). It also stops being the priority device.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -779,6 +923,8 @@ paths:
 
   /clients/{clientId}:
     put:
+      tags: ["Devices"]
+      x-kinara-access: owner
       summary: Trust or rename a device (admin)
       parameters:
         - { name: clientId, in: path, required: true, schema: { type: string } }
@@ -800,6 +946,8 @@ paths:
 
   /me/device:
     put:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user
       summary: >-
         The app describes itself (the same object as `device` on sign-in), so
         sessions from before it sent one get its name and details. Apps send it
@@ -825,6 +973,8 @@ paths:
 
   /requests:
     get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: Requests, newest first. Owners see everyone's; others their own.
       parameters:
         - { name: status, in: query, schema: { type: string, enum: [pending, approved, declined, available] } }
@@ -841,6 +991,8 @@ paths:
                   items: { type: array, items: { $ref: "#/components/schemas/Request" } }
                   pending: { type: integer }
     post:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: Ask for a movie or show that isn't on the server
       description: >
         From a trusted device it is approved straight away (`auto`, `sent`).
@@ -875,15 +1027,152 @@ paths:
 
   /requests/{id}/approve:
     post:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
       summary: Approve a pending request (admin). Emits request.approved.
+      description: >
+        With Radarr (movies) or Sonarr (shows) set up (GET /arr), the request is also sent there
+        in the background: added, or monitored when it's there already, and searched for. The
+        request's arr field says how that went.
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200": { description: The request }
         "409": { description: Not pending }
 
+  /requests/{id}/send:
+    post:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      summary: Send an approved request to Radarr or Sonarr again (owners)
+      description: After fixing a setting. Answers with the request, its arr field saying how it went.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: 'The request; arr is {state: sent or error, note, at}' }
+        "409": { description: Not approved, or the service isn't set up }
+
+  /arr:
+    get:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      summary: Radarr and Sonarr connections (owners)
+      description: >
+        Where approved requests go: radarr for movies, sonarr for shows. Each has enabled, url,
+        apiKey (only its last 4 characters), profileId, rootFolder, tags, search (look for it as
+        soon as it's added), minimumAvailability (Radarr), seasonFolder and seriesType (Sonarr),
+        ready (requests are sent to it), lastError and lastRead from reading its download
+        queue (which the apps show as titles on their way), and health (its own warnings).
+        Also prowlarr {url, apiKey (last 4), hasApiKey, indexers (turned on; -1 unknown), lastError},
+        qbit {url, username, hasPassword, version, lastError}, and stack (a setup script was made).
+      responses:
+        "200": { description: OK }
+    put:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      summary: Change the Radarr and Sonarr connections (owners)
+      description: '{"radarr": {...}, "sonarr": {...}, "prowlarr": {url, apiKey}, "qbit": {url, username, password}}: fields left out keep their values; an apiKey starting with "…" (as GET shows it) keeps the saved key, and an empty qbit password keeps the saved one.'
+      responses:
+        "200": { description: Saved, answered like GET }
+        "400": { description: A value out of range }
+  /arr/{kind}/test:
+    post:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      summary: Try a Radarr, Sonarr, Prowlarr or qBittorrent connection (owners)
+      description: >
+        Body {url, apiKey} ({url, username, password} for qbit; the saved ones when left out).
+        Radarr and Sonarr answer with status, profiles, rootFolders and tags to pick from;
+        Prowlarr with status and indexers (how many are on); qbit with version.
+      parameters:
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [radarr, sonarr, prowlarr, qbit] } }
+      responses:
+        "200": { description: The choices }
+        "502": { description: 'It couldn''t connect, or the key was turned down: the reason' }
+  /arr/stack:
+    get:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      summary: The server, for setting up the download apps in Docker (owners)
+      description: >
+        os and arch, inDocker (Kinara itself runs in a container), docker and compose (found on
+        this computer), install (steps to install Docker here: title, command, note, url),
+        suggested folders {mediaDir, moviesDir, tvDir, downloadsDir} from the libraries, warnings,
+        saved (the folders of the script made before) and ports.
+      responses:
+        "200": { description: OK }
+    post:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      summary: Make the setup script for Prowlarr, Radarr, Sonarr, qBittorrent and FlareSolverr (owners)
+      description: >
+        Body {mediaDir (a full path on the server), moviesDir, tvDir, downloadsDir (folders inside
+        it), ownQbit, newSecrets}. ownQbit: the stack has no qBittorrent; the owner's own one (saved
+        as Kinara's qBittorrent connection first) is added to Radarr and Sonarr at
+        host.docker.internal, with a remote path mapping for its downloads folder. Kinara picks the API keys and qBittorrent password and keeps them; they're
+        reused when the script is made again unless newSecrets. Answers {name, script, compose, run}:
+        a shell script (PowerShell on Windows) that writes the compose file and starts the stack.
+      responses:
+        "200": { description: The script }
+        "400": { description: A folder isn't usable }
+  /arr/stack/connect:
+    post:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      summary: Wire the stack the script started (owners)
+      description: >
+        Waits for the apps, then adds the root folders, qBittorrent's download folder and
+        categories, qBittorrent to Radarr and Sonarr, Radarr and Sonarr to Prowlarr, FlareSolverr
+        to Prowlarr as an indexer proxy (tag "flaresolverr"), Kinara's own
+        connections, and Kinara libraries over the movie and TV folders. Steps already done are
+        skipped. Answers {steps: [{title, state: done, skipped or failed, note}], ok, indexers,
+        prowlarrUrl}.
+      responses:
+        "200": { description: What was done }
+        "409": { description: No script was made }
+  /arr/detect:
+    get:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      summary: Look for the download apps on this computer (owners)
+      description: >
+        Tries Radarr, Sonarr, Prowlarr and qBittorrent on their usual ports here. Answers {apps:
+        [{kind, name, found, url, version, keyFound, stack}], any, inDocker}. keyFound: Kinara has a
+        key or password that works (from the app's settings file, the setup script or the saved
+        connection), or the app needs none, so nothing has to be typed.
+      responses:
+        "200": { description: OK }
+  /arr/detect/connect:
+    post:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      summary: Connect the apps found on this computer (owners)
+      description: >
+        Body {keys: {radarr, sonarr, prowlarr}, qbit: {username, password}}, only for apps whose key
+        Kinara couldn't find. Saves the connections (1080p profile and the first folder for new
+        titles), then links qBittorrent and Prowlarr to Radarr and Sonarr. Answers {steps, ok}.
+      responses:
+        "200": { description: What was done }
+        "409": { description: Nothing found }
+  /arr/link:
+    post:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      summary: Link qBittorrent and Prowlarr to Radarr and Sonarr (owners)
+      description: >
+        For apps set up by hand. Adds qBittorrent to Radarr and Sonarr and Radarr and Sonarr to
+        Prowlarr, unless there already. Body (all optional) {radarrFromProwlarr, sonarrFromProwlarr,
+        prowlarrFromApps, qbitFromApps}: the addresses as the apps see each other, when that isn't
+        the address Kinara uses (in Docker, for example); flareSolverr (as Prowlarr reaches it) also
+        adds it to Prowlarr as an indexer proxy with the tag "flaresolverr". Answers {steps}.
+      responses:
+        "200": { description: What was done }
+        "409": { description: Nothing to link }
+
   /requests/{id}/decline:
     post:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
       summary: Decline a pending or approved request (admin). Emits request.declined.
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -896,6 +1185,8 @@ paths:
 
   /requests/{id}:
     delete:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: Cancel your own pending request; owners may remove any
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -905,6 +1196,8 @@ paths:
 
   /discover:
     get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: The Discover page, kept for an hour
       description: >
         Sections in order (empty ones left out): trending, new-movies,
@@ -933,6 +1226,8 @@ paths:
 
   /discover/{section}:
     get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: One Discover section, paged (20 a page)
       parameters:
         - { name: section, in: path, required: true, schema: { type: string } }
@@ -947,6 +1242,8 @@ paths:
 
   /discover/genre/{kind}/{genreId}:
     get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: Titles in one genre, paged
       parameters:
         - { name: kind, in: path, required: true, schema: { type: string, enum: [movie, show] } }
@@ -962,6 +1259,8 @@ paths:
 
   /search/external:
     get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: Search TMDB for movies and shows, in the library or not
       parameters:
         - { name: q, in: query, required: true, schema: { type: string } }
@@ -975,6 +1274,8 @@ paths:
 
   /fs/folders:
     get:
+      tags: ["Libraries"]
+      x-kinara-access: owner
       summary: Folders on the server's disks, for the folder picker (admin)
       description: >
         With no path, lists places to start: drives on Windows; the root, home
@@ -1009,6 +1310,9 @@ paths:
 
   /libraries/{id}/scan:
     post:
+      tags: ["Libraries"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "library:scan"
       summary: Start a scan (admin, or an API key with library:scan)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -1023,6 +1327,8 @@ paths:
 
   /libraries/{id}/rematch:
     post:
+      tags: ["Libraries"]
+      x-kinara-access: owner
       summary: Retry matching for unmatched items, then scan (admin)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -1031,6 +1337,9 @@ paths:
 
   /items:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
+      x-kinara-key-scope: "library:read"
       summary: Browse items
       parameters:
         - { name: libraryId, in: query, schema: { type: integer } }
@@ -1070,6 +1379,9 @@ paths:
 
   /items/{id}:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
+      x-kinara-key-scope: "library:read"
       summary: Item details
       description: |
         Movies and episodes include their files. Episodes include their season
@@ -1098,9 +1410,35 @@ paths:
                     description: Movies and shows; episodes get their show's cast
                     items: { $ref: "#/components/schemas/CastMember" }
                   trackPrefs: { $ref: "#/components/schemas/TrackPrefs" }
+    patch:
+      tags: ["Titles"]
+      x-kinara-access: owner
+      summary: Edit a title by hand (owners only)
+      description: Fields left out stay. Every field changed is locked, so matching and refreshing from TMDB leave it as edited. Answers like GET /items/{id}/edit.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                sortTitle: { type: string, description: "Follows the title (without The, A or An) unless given" }
+                year: { type: integer }
+                overview: { type: string }
+                rating: { type: number, description: 0 to 10 }
+                airDate: { type: string, description: YYYY-MM-DD }
+                genres: { type: array, items: { type: string } }
+      responses:
+        "200": { description: Saved }
+        "400": { description: Empty title, bad year, date or rating }
+
 
   /items/letters:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
       summary: Where each letter starts in the A to Z list, for a jump bar
       description: Takes the same filters as /items (sort is always title). "#" is titles starting with a digit or symbol.
       responses:
@@ -1121,6 +1459,8 @@ paths:
 
   /items/{id}/prefs:
     put:
+      tags: ["Titles"]
+      x-kinara-access: user
       summary: Save audio and subtitle choices for the show or movie this item belongs to
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1138,6 +1478,8 @@ paths:
 
   /search:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
       summary: Find movies and shows by title
       parameters:
         - { name: q, in: query, required: true, schema: { type: string } }
@@ -1156,6 +1498,8 @@ paths:
 
   /profiles:
     get:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user
       summary: This account's profiles and the one this device is watching as
       responses:
         "200":
@@ -1170,6 +1514,8 @@ paths:
                     items: { $ref: "#/components/schemas/Profile" }
                   current: { type: integer }
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user
       summary: Add a profile (up to 12)
       requestBody:
         required: true
@@ -1192,6 +1538,8 @@ paths:
 
   /profiles/{id}:
     patch:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user
       summary: Change a profile (fields not sent stay as they are; pin "" removes the PIN)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -1199,6 +1547,8 @@ paths:
         "200": { description: Updated }
         "403": { description: The profile has a PIN and isn't the one selected }
     delete:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user
       summary: Remove a profile and its history (not the last one)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -1207,6 +1557,8 @@ paths:
 
   /profiles/{id}/select:
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user
       summary: Watch as this profile on this device
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -1224,6 +1576,8 @@ paths:
 
   /cast/{id}/{ord}:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
       summary: A cast member's photo, resized on request
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1236,6 +1590,9 @@ paths:
 
   /items/{id}/children:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
+      x-kinara-key-scope: "library:read"
       summary: Seasons of a show, or episodes of a season, in order
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1253,6 +1610,8 @@ paths:
 
   /items/{id}/watched:
     post:
+      tags: ["Titles"]
+      x-kinara-access: user
       summary: Mark watched or unwatched (shows and seasons apply to every episode)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1269,6 +1628,8 @@ paths:
 
   /items/{id}/match:
     post:
+      tags: ["Titles"]
+      x-kinara-access: owner
       summary: Fix a match by TMDB ID (admin)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1289,6 +1650,8 @@ paths:
 
   /home:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
       summary: Continue Watching and Recently Added
       responses:
         "200":
@@ -1315,6 +1678,8 @@ paths:
 
   /progress/{id}:
     put:
+      tags: ["Playback"]
+      x-kinara-access: user
       summary: Report playback position for a movie or episode
       description: |
         Send every 10 seconds, on pause, and on stop. Past 92% of the file's
@@ -1342,6 +1707,8 @@ paths:
 
   /stream/{id}:
     get:
+      tags: ["Playback"]
+      x-kinara-access: user
       summary: Direct play a file (supports Range requests)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string }, description: Version ID }
@@ -1352,6 +1719,8 @@ paths:
 
   /images/{id}/{kind}:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
       summary: Artwork, resized on request
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1364,6 +1733,8 @@ paths:
 
   /images/{id}/{kind}/color:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
       summary: The artwork's dominant colour, for tinting the app to match it
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1377,6 +1748,8 @@ paths:
 
   /transcode/{id}:
     get:
+      tags: ["Playback"]
+      x-kinara-access: user
       summary: Convert a file on the fly for players that can't play it as is
       description: |
         A Matroska stream written as ffmpeg produces it. It can't be seeked;
@@ -1400,6 +1773,8 @@ paths:
 
   /speedtest:
     get:
+      tags: ["Playback"]
+      x-kinara-access: user
       summary: Random bytes, for the app to measure the connection
       parameters:
         - { name: bytes, in: query, schema: { type: integer }, description: "64 KB to 32 MB" }
@@ -1408,6 +1783,8 @@ paths:
 
   /trickplay/{id}:
     get:
+      tags: ["Playback"]
+      x-kinara-access: user
       summary: Preview thumbnails for skipping through a file
       description: |
         Frame n (time n * interval) is on sheet floor(n / (cols * rows)) + 1,
@@ -1435,6 +1812,8 @@ paths:
 
   /trickplay/{id}/{sheet}:
     get:
+      tags: ["Playback"]
+      x-kinara-access: user
       summary: One sheet of preview thumbnails (JPEG)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1445,6 +1824,8 @@ paths:
 
   /genres:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
       summary: Genres with available titles, most titles first
       parameters:
         - { name: kind, in: query, schema: { type: string, enum: [movie, show] } }
@@ -1462,6 +1843,8 @@ paths:
 
   /trending:
     get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: What's trending on TMDB this week, marked with what's in the library
       description: |
         Lists of titles (today, movies, shows) from TMDB, refreshed hourly.
@@ -1474,6 +1857,8 @@ paths:
 
   /tmdb/{kind}/{id}:
     get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: A movie or show from TMDB, whether or not it's in the library
       description: |
         Details, top cast and (for shows) seasons, for a title page opened from
@@ -1493,6 +1878,8 @@ paths:
 
   /tmdb/show/{id}/season/{n}:
     get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: A season's episodes from TMDB (titles, dates, stills), for shows outside the library
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer }, description: The show's TMDB ID }
@@ -1504,6 +1891,8 @@ paths:
 
   /tmdb-image/{file}:
     get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
       summary: TMDB artwork for titles not in the library (Trending), resized on request
       parameters:
         - { name: file, in: path, required: true, schema: { type: string }, description: 'Like "abc123.jpg"' }
@@ -1514,6 +1903,8 @@ paths:
 
   /auth/accounts:
     get:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: public
       summary: Accounts the sign-in screen can offer, and whether new ones can be made
       security: []
       description: |
@@ -1534,6 +1925,8 @@ paths:
 
   /auth/signup:
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: public
       summary: Make an ordinary account and sign it in (only when the owner allows sign-up)
       security: []
       requestBody:
@@ -1555,6 +1948,8 @@ paths:
 
   /auth/quick/start:
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: public
       summary: Quick Connect - get a code to sign this device in from a phone or the web app
       description: >
         For TVs and other devices where typing a password is a chore. Show the
@@ -1587,6 +1982,8 @@ paths:
 
   /auth/quick/poll:
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: public
       summary: Quick Connect - has the code been approved?
       security: []
       requestBody:
@@ -1600,6 +1997,8 @@ paths:
 
   /auth/quick/cancel:
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: public
       summary: Quick Connect - forget a code this device no longer shows
       security: []
       requestBody:
@@ -1611,6 +2010,8 @@ paths:
 
   /auth/quick/{code}:
     get:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user
       summary: Quick Connect - which device is waiting behind a code
       parameters:
         - { name: code, in: path, required: true, schema: { type: string } }
@@ -1630,6 +2031,8 @@ paths:
 
   /auth/quick/approve:
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user-full
       summary: Quick Connect - sign the code's device in as you
       requestBody:
         content:
@@ -1646,6 +2049,8 @@ paths:
 
   /setup:
     post:
+      tags: ["Server"]
+      x-kinara-access: public
       summary: First run only - make the owner account and sign it in
       description: >
         Works only while the server has no accounts (health says setupDone false)
@@ -1670,10 +2075,14 @@ paths:
 
   /lists:
     get:
+      tags: ["Lists"]
+      x-kinara-access: user
       summary: This profile's lists ("My List" first, made on first use) with counts
       responses:
         "200": { description: OK }
     post:
+      tags: ["Lists"]
+      x-kinara-access: user
       summary: Make a named list
       requestBody:
         content:
@@ -1687,10 +2096,14 @@ paths:
     parameters:
       - { name: id, in: path, required: true, schema: { type: integer } }
     patch:
+      tags: ["Lists"]
+      x-kinara-access: user
       summary: Rename a list
       responses:
         "204": { description: Renamed }
     delete:
+      tags: ["Lists"]
+      x-kinara-access: user
       summary: Remove a named list ("My List" can't be removed)
       responses:
         "204": { description: Removed }
@@ -1698,6 +2111,8 @@ paths:
 
   /lists/{id}/items:
     get:
+      tags: ["Lists"]
+      x-kinara-access: user
       summary: The titles on a list, newest first ("default" for My List)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string }, description: 'A list ID, or "default"' }
@@ -1709,20 +2124,28 @@ paths:
       - { name: id, in: path, required: true, schema: { type: string }, description: 'A list ID, or "default"' }
       - { name: item, in: path, required: true, schema: { type: string }, description: A movie or show }
     put:
+      tags: ["Lists"]
+      x-kinara-access: user
       summary: Add a title to a list (again is fine)
       responses:
         "204": { description: Added }
     delete:
+      tags: ["Lists"]
+      x-kinara-access: user
       summary: Take a title off a list
       responses:
         "204": { description: Removed }
 
   /users:
     get:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: owner
       summary: Every account (owners only)
       responses:
         "200": { description: OK }
     post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: owner
       summary: Add an account (owners only)
       requestBody:
         content:
@@ -1741,17 +2164,85 @@ paths:
     parameters:
       - { name: id, in: path, required: true, schema: { type: integer } }
     patch:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: owner
       summary: Set a new password (signs the account out everywhere) or change owner rights
       responses:
         "204": { description: Saved }
         "409": { description: That would leave the server without an owner }
     delete:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: owner
       summary: Remove an account and its history (not your own)
       responses:
         "204": { description: Removed }
 
+  /settings/transcoding:
+    get:
+      tags: ["Server"]
+      x-kinara-access: owner
+      summary: Transcoding settings and what was detected (owners only)
+      description: >
+        The owner's transcoding choices (they override KINARA_HWACCEL, KINARA_HW_DEVICE and
+        KINARA_MAX_TRANSCODES), the encoder and graphics card in use, the encoders this system
+        could have, its render nodes (Linux), and how many streams convert at once. checking is
+        true while a new graphics card choice is being tried.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings:
+                    type: object
+                    properties:
+                      encoder: { type: string, enum: ["", auto, none, nvenc, qsv, vaapi, amf, videotoolbox], description: '"" follows KINARA_HWACCEL; none is the CPU only' }
+                      device: { type: string, description: 'Linux render node, "" follows KINARA_HW_DEVICE' }
+                      speed: { type: string, enum: [faster, balanced, quality] }
+                      maxJobs: { type: integer, description: Conversions at once, 0 automatic }
+                      defaultKbps: { type: integer, description: Bitrate when the player asks none (0 is 8000) }
+                      homeMaxKbps: { type: integer, description: Most a conversion uses at home, 0 no limit }
+                      homeMaxHeight: { type: integer, enum: [0, 360, 480, 720, 1080, 1440, 2160] }
+                      awayMaxKbps: { type: integer, description: Most a conversion uses away from home, 0 no limit }
+                      awayMaxHeight: { type: integer, enum: [0, 360, 480, 720, 1080, 1440, 2160] }
+                      toneMap: { type: string, enum: [auto, zscale], description: Dolby Vision keeps libplacebo either way }
+                      toneMapCurve: { type: string, enum: [auto, hable, mobius, reinhard, bt.2390] }
+                      audioChannels: { type: integer, enum: [0, 2], description: 0 up to 5.1, 2 stereo always }
+                      stereoKbps: { type: integer, description: AAC stereo bitrate, 0 is 192 }
+                      surroundKbps: { type: integer, description: AAC surround bitrate, 0 is 384 }
+                      dialogueBoost: { type: boolean, description: Lift dialogue when mixing surround down to stereo (default on) }
+                  available: { type: boolean }
+                  checking: { type: boolean }
+                  detected: { type: object, description: The encoder in use (h264Encoder, hw, hwDevice, cuda, toneMap, placebo, software) }
+                  platform: { type: string }
+                  backends: { type: array, items: { type: object, properties: { id: { type: string }, label: { type: string }, listed: { type: boolean }, works: { type: boolean }, device: { type: string } } } }
+                  devices: { type: array, items: { type: object, properties: { path: { type: string }, vendor: { type: string } } } }
+                  envEncoder: { type: string }
+                  envDevice: { type: string }
+                  maxJobs: { type: integer, description: Conversions at once now }
+    put:
+      tags: ["Server"]
+      x-kinara-access: owner
+      summary: Save transcoding settings (owners only)
+      description: Fields left out keep their values. Applies to conversions that start afterwards, without a restart. Answers like GET.
+      responses:
+        "200": { description: Saved }
+        "400": { description: A value out of range }
+  /settings/transcoding/test:
+    post:
+      tags: ["Server"]
+      x-kinara-access: owner
+      summary: Try every graphics card encoder (owners only)
+      description: Encodes a test frame with each encoder this system could have, whatever is chosen now. Takes a few seconds per card.
+      responses:
+        "200": { description: 'backends: listed (this ffmpeg has it) and works (it encoded here)' }
+        "501": { description: Converting is turned off on this server }
   /settings/home-pin:
     put:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Set or remove the PIN asked for signing in on the home network (owners only)
       requestBody:
         required: true
@@ -1767,6 +2258,8 @@ paths:
 
   /settings:
     get:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Server settings (owners only)
       responses:
         "200":
@@ -1785,7 +2278,11 @@ paths:
                   groupCollections: { type: boolean, description: Show a franchise's movies as one card in movie libraries (default on) }
                   homeSignIn: { type: boolean, description: "On the home network, devices sign in by picking an account, no password (default on; see /auth/home)" }
                   hasHomePin: { type: boolean, description: A PIN is asked for that (read only; set with PUT /settings/home-pin) }
+                  webRemotePlay: { type: boolean, description: "The Kinara account may watch in a web browser away from home, through the cloud's watch page (default on; see /auth/cloud)" }
+                  relayMaxKbps: { type: integer, description: "Video through Kinara's relay is held to this, in kbit/s: conversions are capped and files sent as they are go no faster (default 4000; 1000 to 40000, or 0 for no cap). Direct connections aren't capped." }
     put:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Save server settings (owners only)
       description: Fields left out keep their values.
       responses:
@@ -1793,6 +2290,8 @@ paths:
 
   /items/{id}/edit:
     get:
+      tags: ["Titles"]
+      x-kinara-access: owner
       summary: A title's editable details (owners only)
       description: |
         title, sortTitle, year, overview, rating, airDate, genres; locked (fields
@@ -1804,31 +2303,10 @@ paths:
       responses:
         "200": { description: OK }
 
-  /items/{id}:
-    patch:
-      summary: Edit a title by hand (owners only)
-      description: Fields left out stay. Every field changed is locked, so matching and refreshing from TMDB leave it as edited. Answers like GET /items/{id}/edit.
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                title: { type: string }
-                sortTitle: { type: string, description: "Follows the title (without The, A or An) unless given" }
-                year: { type: integer }
-                overview: { type: string }
-                rating: { type: number, description: 0 to 10 }
-                airDate: { type: string, description: YYYY-MM-DD }
-                genres: { type: array, items: { type: string } }
-      responses:
-        "200": { description: Saved }
-        "400": { description: Empty title, bad year, date or rating }
-
   /items/{id}/unlock:
     post:
+      tags: ["Titles"]
+      x-kinara-access: owner
       summary: Give fields back to TMDB (owners only)
       description: 'Unlocks them ({"fields": ["title", "poster"]} or ["all"]) and refreshes the title from TMDB now.'
       parameters:
@@ -1838,6 +2316,8 @@ paths:
 
   /items/{id}/artwork/{kind}:
     get:
+      tags: ["Titles"]
+      x-kinara-access: owner
       summary: TMDB's artwork for a title, best first (owners only)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1848,6 +2328,8 @@ paths:
 
   /items/{id}/images/{kind}:
     put:
+      tags: ["Titles"]
+      x-kinara-access: owner
       summary: 'Use TMDB artwork: {"path": "/abc.jpg"} from the list (owners only; locks it)'
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1857,6 +2339,8 @@ paths:
 
   /items/{id}/images/{kind}/upload:
     post:
+      tags: ["Titles"]
+      x-kinara-access: owner
       summary: Upload artwork, a JPEG or PNG up to 20 MB as the body (owners only; locks it)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -1871,6 +2355,8 @@ paths:
 
   /items/{id}/download:
     get:
+      tags: ["Titles"]
+      x-kinara-access: user
       summary: Download qualities for a title, with expected sizes
       description: |
         For a movie or an episode, or a season or show (all its episodes, or
@@ -1905,6 +2391,8 @@ paths:
 
   /downloads:
     get:
+      tags: ["Downloads"]
+      x-kinara-access: user
       summary: This account's downloads on all its devices (?device=this for just this one)
       responses:
         "200":
@@ -1917,6 +2405,8 @@ paths:
                   enabled: { type: boolean }
                   downloads: { type: array, items: { $ref: "#/components/schemas/Download" } }
     post:
+      tags: ["Downloads"]
+      x-kinara-access: user
       summary: Download a title on this device
       description: |
         A movie or an episode, or every episode of a season or show
@@ -1951,6 +2441,8 @@ paths:
 
   /downloads/all:
     get:
+      tags: ["Downloads"]
+      x-kinara-access: owner
       summary: Everyone's downloads, the room they take and the settings (owners only)
       responses:
         "200":
@@ -1969,6 +2461,8 @@ paths:
 
   /downloads/settings:
     put:
+      tags: ["Downloads"]
+      x-kinara-access: owner
       summary: Change the download settings (owners only)
       requestBody:
         content:
@@ -1979,6 +2473,8 @@ paths:
 
   /downloads/{id}:
     get:
+      tags: ["Downloads"]
+      x-kinara-access: user
       summary: A download with what's needed to play it offline
       description: |
         Adds the file's details and markers ("version"), the audio track
@@ -1989,6 +2485,8 @@ paths:
       responses:
         "200": { description: OK }
     delete:
+      tags: ["Downloads"]
+      x-kinara-access: user
       summary: Remove a download (the server removes its copy once nobody wants it)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -1997,6 +2495,8 @@ paths:
 
   /downloads/{id}/file:
     get:
+      tags: ["Downloads"]
+      x-kinara-access: user
       summary: Fetch a ready download (byte ranges; also takes ?token=)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2007,6 +2507,8 @@ paths:
 
   /downloads/{id}/saved:
     post:
+      tags: ["Downloads"]
+      x-kinara-access: user
       summary: Say this device has all of the file
       description: The server removes its prepared copy a few days after every device that wanted it has it.
       parameters:
@@ -2016,6 +2518,8 @@ paths:
 
   /optimize:
     get:
+      tags: ["Playback"]
+      x-kinara-access: owner
       summary: Optimized versions, by rule, with the room they take (owners only)
       description: |
         A rule asks for a smaller copy (an MP4 with H.264 and stereo AAC) of
@@ -2027,6 +2531,8 @@ paths:
       responses:
         "200": { description: OK }
     post:
+      tags: ["Playback"]
+      x-kinara-access: owner
       summary: Optimize a library or a title (owners only)
       description: Asking again for the same library or title changes its quality.
       requestBody:
@@ -2044,6 +2550,8 @@ paths:
 
   /optimize/{id}:
     delete:
+      tags: ["Playback"]
+      x-kinara-access: owner
       summary: Remove a rule (its copies go unless a download still uses them; owners only)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2052,6 +2560,8 @@ paths:
 
   /optimize/{id}/retry:
     post:
+      tags: ["Playback"]
+      x-kinara-access: owner
       summary: Put a rule's failed copies back in line (owners only)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2060,6 +2570,8 @@ paths:
 
   /items/{id}/optimize:
     get:
+      tags: ["Titles"]
+      x-kinara-access: owner
       summary: The optimize rule for a title (or its library) and its copies (owners only)
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
@@ -2068,6 +2580,8 @@ paths:
 
   /subtitles/{id}/auto:
     get:
+      tags: ["Subtitles"]
+      x-kinara-access: user
       summary: A file's subtitle files and the automatic search for it
       description: |
         Players ask while playing: it also puts the file at the front of the
@@ -2082,6 +2596,8 @@ paths:
 
   /subtitles/{id}/files/{file}/wrong:
     post:
+      tags: ["Subtitles"]
+      x-kinara-access: user
       summary: Say a downloaded subtitle is wrong
       description: It's never picked for this file again, removed when the server fetched it, and the next one is looked for straight away.
       parameters:
@@ -2093,18 +2609,24 @@ paths:
 
   /subtitles/auto:
     get:
+      tags: ["Subtitles"]
+      x-kinara-access: owner
       summary: Automatic subtitles, the services and today's use, and what's missing (owners only)
       responses:
         "200": { description: OK }
 
   /subtitles/auto/retry:
     post:
+      tags: ["Subtitles"]
+      x-kinara-access: owner
       summary: Look again for missing subtitles (all, or one file's with versionId; owners only)
       responses:
         "200": { description: How many were put back in line }
 
   /backups:
     get:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Backups, their settings and the next nightly one (owners only)
       responses:
         "200":
@@ -2120,6 +2642,8 @@ paths:
                   nextAt: { type: integer, description: Unix seconds of the next nightly backup (0 when off) }
                   error: { type: string }
     post:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Make a backup now (owners only)
       responses:
         "201":
@@ -2130,6 +2654,8 @@ paths:
 
   /backups/settings:
     put:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Change the backup settings (owners only)
       description: Fields left out keep their values. A folder is checked for writing first.
       requestBody:
@@ -2142,12 +2668,16 @@ paths:
 
   /backups/{name}:
     get:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Download a backup (owners only; also takes ?token=)
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
       responses:
         "200": { description: The zip file, content: { application/zip: {} } }
     delete:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Delete a backup (owners only)
       parameters:
         - { name: name, in: path, required: true, schema: { type: string } }
@@ -2156,6 +2686,8 @@ paths:
 
   /backups/{name}/restore:
     post:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Restore a backup from the list (owners only)
       description: |
         Checks the backup, makes a backup of the library as it is now
@@ -2178,6 +2710,8 @@ paths:
 
   /backups/restore:
     post:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Restore an uploaded backup (owners only)
       description: The request body is the backup's zip file. ?settings=1 also restores kinara.env. Otherwise as /backups/{name}/restore.
       parameters:
@@ -2191,6 +2725,8 @@ paths:
 
   /update:
     get:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Whether a newer Kinara is out, and any install in progress (owners only)
       responses:
         "200":
@@ -2201,6 +2737,8 @@ paths:
 
   /update/check:
     post:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Check for a newer Kinara now (owners only)
       responses:
         "200":
@@ -2211,6 +2749,8 @@ paths:
 
   /update/install:
     post:
+      tags: ["Server"]
+      x-kinara-access: owner
       summary: Download and install the newer Kinara (owners only; Windows and macOS installs)
       description: |
         Downloads the installer for this computer, checks its size and
@@ -2231,6 +2771,8 @@ paths:
 
   /hls/{id}:
     post:
+      tags: ["Playback"]
+      x-kinara-access: user
       summary: Start an HLS conversion of a file (iPhones, iPads, Safari)
       description: |
         Takes the same query as /transcode/{id} (video, audioCodec, audio,
@@ -2255,6 +2797,8 @@ paths:
 
   /hls/session/{session}/{file}:
     get:
+      tags: ["Playback"]
+      x-kinara-access: public
       summary: An HLS session's playlist (index.m3u8) or segment (init.mp4, segNNNNN.m4s)
       security: []
       parameters:
@@ -2266,6 +2810,8 @@ paths:
 
   /hls/session/{session}:
     delete:
+      tags: ["Playback"]
+      x-kinara-access: user
       summary: Stop an HLS session and delete its files
       parameters:
         - { name: session, in: path, required: true, schema: { type: string } }
@@ -2274,6 +2820,8 @@ paths:
 
   /libraries/{id}/problems:
     get:
+      tags: ["Libraries"]
+      x-kinara-access: owner
       summary: Files that couldn't be read or placed, and titles that didn't match (owners only)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2282,11 +2830,16 @@ paths:
 
   /status:
     get:
+      tags: ["Integrations"]
+      x-kinara-access: owner
       summary: How the server is set up (owners only)
       description: Version, warnings, whether metadata, converting and HLS are on, what ffmpeg can do, and what the background worker is doing.
       responses:
         "200": { description: OK }
     post:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "status:write"
       summary: Report on a title on its way (an API key with status:write, or an owner)
       description: >
         The Kinara format, the same as an incoming hook: tmdbId (with kind),
@@ -2312,16 +2865,25 @@ paths:
 
   /integrations/events:
     get:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Every webhook event and API key scope (owners)
       responses:
         "200": { description: '{"items": [{"id", "group", "label", "description", "soon"?}], "scopes": [{"id", "label", "description"}]}' }
 
   /integrations/webhooks:
     get:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Outgoing webhooks (owners, or webhooks:manage)
       responses:
         "200": { description: '{"items": [Webhook]}. Webhook: {id, name, url, enabled, secret, events[], libraries: "all"|number[], accounts: "all"|number[], headers: [{name, value}], retries (0..8), timeoutSec (5..30), includePaths, health: {state: ok|failing|never|paused, lastAt?, lastStatus, lastError?}, createdAt}' }
     post:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Add a webhook (a secret is made when none is sent)
       requestBody:
         content:
@@ -2333,12 +2895,18 @@ paths:
 
   /integrations/webhooks/{id}:
     put:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Change a webhook (fields left out keep their value)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200": { description: The webhook }
     delete:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Remove a webhook with its queue and log
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2347,6 +2915,9 @@ paths:
 
   /integrations/webhooks/{id}/test:
     post:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Send a "test" event now; answers with the delivery
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2355,6 +2926,9 @@ paths:
 
   /integrations/webhooks/{id}/secret:
     post:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Make a new secret; the old one stops working
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2363,6 +2937,9 @@ paths:
 
   /integrations/webhooks/{id}/deliveries:
     get:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Recent tries, newest first (kept 7 days)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2372,6 +2949,9 @@ paths:
 
   /integrations/webhooks/{id}/deliveries/{delivery}/redeliver:
     post:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Send a logged delivery again now, with a new delivery ID; answers with the result
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2381,22 +2961,34 @@ paths:
 
   /integrations/incoming:
     get:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Incoming hooks (owners, or webhooks:manage)
       responses:
         "200": { description: '{"items": [Hook]}. Hook: {id, name, token, path, enabled, format: kinara|custom, mapping: {field: path}, stateMap: [{from, to}], progressScale: auto|fraction|percent, onDone: scan|nothing, expireHours, visibility: owners|everyone, lastReceivedAt, createdAt}' }
     post:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Add an incoming hook (a token is made)
       responses:
         "201": { description: The hook }
 
   /integrations/incoming/{id}:
     put:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Change an incoming hook (fields left out keep their value)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
       responses:
         "200": { description: The hook }
     delete:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Remove a hook, its log and the statuses it reported
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2405,6 +2997,9 @@ paths:
 
   /integrations/incoming/{id}/token:
     post:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Give a hook a new address; the old one stops working
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2413,6 +3008,9 @@ paths:
 
   /integrations/incoming/{id}/received:
     get:
+      tags: ["Integrations"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: What the hook was sent, newest first (last 200 kept)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2422,6 +3020,8 @@ paths:
 
   /hooks/in/{token}:
     post:
+      tags: ["Integrations"]
+      x-kinara-access: public
       summary: Receive an update at an incoming hook's address (no sign-in; the address is the secret)
       security: []
       parameters:
@@ -2436,12 +3036,18 @@ paths:
 
   /ontheway:
     get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
+      x-kinara-key-scope: "webhooks:manage"
       summary: Titles on their way that the asker may see (owners see all)
       responses:
         "200": { description: '{"items": [{id, kind, tmdbId, title, year?, season?, episode?, state, progress?, message?, etaSec?, updatedAt, source, item?: {id}}]}' }
 
   /ontheway/{id}:
     delete:
+      tags: ["Discover and requests"]
+      x-kinara-access: owner
+      x-kinara-key-scope: "webhooks:manage"
       summary: Clear a status (owners, or webhooks:manage)
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2450,16 +3056,22 @@ paths:
 
   /integrations/keys:
     get:
+      tags: ["Integrations"]
+      x-kinara-access: owner
       summary: API keys (owners)
       responses:
         "200": { description: '{"items": [{id, name, prefix, scopes, network: local|any, createdAt, lastUsedAt?, expiresAt?}]}' }
     post:
+      tags: ["Integrations"]
+      x-kinara-access: owner
       summary: 'Make a key: {name, scopes[], network, expiresDays: 0|30|90|365}. The answer has the whole key ("key") once.'
       responses:
         "201": { description: The key, with "key" }
 
   /integrations/keys/{id}:
     delete:
+      tags: ["Integrations"]
+      x-kinara-access: owner
       summary: Revoke a key
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer } }
@@ -2467,6 +3079,8 @@ paths:
         "204": { description: Revoked }
   /time:
     get:
+      tags: ["Server"]
+      x-kinara-access: public
       summary: >-
         The server clock in Unix milliseconds, for apps lining their clocks up
         for watch parties. No sign-in needed.
@@ -2479,6 +3093,8 @@ paths:
               schema: { type: object, properties: { t: { type: number } } }
   /me/device/name:
     put:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: user
       summary: Name this device ("Living Room TV"), shown in watch party invites.
       requestBody:
         content:
@@ -2486,18 +3102,252 @@ paths:
             schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 40 } } }
       responses:
         "200": { description: The device and its new name }
+  /auth/cloud:
+    post:
+      tags: ["Sign-in and accounts"]
+      x-kinara-access: public
+      summary: Sign in with a Kinara account
+      description: |
+        Turns an access token from the Kinara cloud (POST /v1/servers/{id}/access
+        on cloud.kinara.media) into a session on this server. Works from anywhere, which is how
+        the apps sign in away from home. Limited per address.
+
+        The cloud's watch page (cloud.kinara.media/watch) gets a short-lived pass marked for a
+        web browser and opens this server's web app with it (/app/#kinara-pass=...); the web
+        app swaps it here. Such a pass is refused while the owner has webRemotePlay off.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string, description: The cloud's access token for this server }
+                deviceName: { type: string }
+                device: { $ref: "#/components/schemas/DeviceInfo" }
+      responses:
+        "200": { description: 'Signed in: token, user and profiles, like POST /auth/login' }
+        "401": { description: The token isn't valid for this server }
+        "403": { description: A web browser's pass while watching in a browser away from home is turned off }
+        "429": { description: Too many tries from this address }
+        "501": { description: This server isn't linked to a Kinara account }
+  /pulse:
+    get:
+      tags: ["Server"]
+      x-kinara-access: user
+      summary: What changed (for refreshing screens)
+      description: |
+        Cheap to call every few seconds. Each number changes when its part of
+        the server does, so an app refetches only what moved: library (a scan
+        or match changed titles), requests, party (watch parties). active lists
+        titles with an incoming status in progress.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  library: { type: integer }
+                  requests: { type: integer }
+                  party: { type: integer }
+                  active: { type: array, items: { type: object } }
+  /items/{id}/similar:
+    get:
+      tags: ["Titles"]
+      x-kinara-access: user
+      summary: More like this, for a library title
+      description: TMDB's recommendations for the title (an episode or season answers for its show), each marked like a Discover card. Needs a TMDB key on the server.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200": { description: 'items, page, totalPages' }
+        "404": { description: No such title }
+  /tmdb/{kind}/{id}/similar:
+    get:
+      tags: ["Discover and requests"]
+      x-kinara-access: user
+      summary: More like this, for a title not on the server
+      parameters:
+        - { name: kind, in: path, required: true, schema: { type: string, enum: [movie, show] } }
+        - { name: id, in: path, required: true, schema: { type: integer }, description: TMDB ID }
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200": { description: 'items, page, totalPages' }
+  /transcode/{id}/start:
+    get:
+      tags: ["Playback"]
+      x-kinara-access: user
+      summary: Where a converted stream can start
+      description: |
+        For a converted stream that keeps the original picture: the keyframe near
+        ?at= (the next one with dir=forward, else the one before). Ask for the
+        stream at "request" and count the clock from "start", so the position
+        shown matches the picture.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: Version ID }
+        - { name: at, in: query, schema: { type: number }, description: Seconds }
+        - { name: dir, in: query, schema: { type: string, enum: [forward] } }
+      responses:
+        "200": { description: 'request and start, in seconds' }
+        "404": { description: File not found }
+  /subtitles/{versionId}/{index}:
+    get:
+      tags: ["Subtitles"]
+      x-kinara-access: user
+      summary: A subtitle track as WebVTT
+      description: Text tracks inside the file, or added ones, converted to WebVTT (with any sync correction applied). Takes ?token=.
+      parameters:
+        - { name: versionId, in: path, required: true, schema: { type: string } }
+        - { name: index, in: path, required: true, schema: { type: string } }
+        - { name: token, in: query, schema: { type: string } }
+      responses:
+        "200": { description: WebVTT, content: { text/vtt: {} } }
+        "404": { description: No such track }
+  /remote:
+    get:
+      tags: ["Remote access"]
+      x-kinara-access: owner
+      summary: Remote access status (owners)
+      description: The tunnel's state, its pairing ticket and QR code, devices connected through it, and blocked devices.
+      responses:
+        "200": { description: OK }
+  /remote/settings:
+    put:
+      tags: ["Remote access"]
+      x-kinara-access: owner
+      summary: Turn remote access on or off (owners)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                udpPort: { type: integer, description: 0 picks one automatically }
+      responses:
+        "204": { description: Saved }
+        "409": { description: Remote access isn't available on this server }
+  /remote/block:
+    post:
+      tags: ["Remote access"]
+      x-kinara-access: owner
+      summary: Block a device from the tunnel (owners)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nodeId]
+              properties:
+                nodeId: { type: string, description: 64 lowercase hex characters }
+                label: { type: string }
+      responses:
+        "204": { description: Blocked }
+  /remote/unblock:
+    post:
+      tags: ["Remote access"]
+      x-kinara-access: owner
+      summary: Let a blocked device in again (owners)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nodeId]
+              properties:
+                nodeId: { type: string }
+      responses:
+        "204": { description: Unblocked }
+  /cloud:
+    get:
+      tags: ["Remote access"]
+      x-kinara-access: owner
+      summary: Kinara account link status (owners)
+      description: Whether the server is linked to a Kinara account, the account, how it's reachable from outside (direct, relay), the certificate and the router port. Once linked, watchUrl is the cloud's page for watching in a web browser away from home.
+      responses:
+        "200": { description: OK }
+  /cloud/link:
+    post:
+      tags: ["Remote access"]
+      x-kinara-access: owner
+      summary: Start linking to a Kinara account (owners)
+      description: Gives a code to approve at cloud.kinara.media/link. The owner who starts it is who the account signs in as on this server.
+      responses:
+        "200": { description: The code and where to enter it }
+        "501": { description: No Kinara cloud set up (KINARA_CLOUD_URL) }
+    delete:
+      tags: ["Remote access"]
+      x-kinara-access: owner
+      summary: Stop waiting for a link code (owners)
+      responses:
+        "204": { description: Stopped }
+  /cloud/unlink:
+    post:
+      tags: ["Remote access"]
+      x-kinara-access: owner
+      summary: Unlink from the Kinara account (owners)
+      responses:
+        "204": { description: Unlinked }
+  /metrics/live:
+    get:
+      tags: ["Server"]
+      x-kinara-access: owner
+      summary: Processor, GPU, memory and traffic (owners)
+      parameters:
+        - { name: range, in: query, schema: { type: string }, description: 'How far back, such as 5m, 1h or 24h' }
+      responses:
+        "200": { description: Samples over the range }
+        "501": { description: Metrics are off }
+  /metrics/storage:
+    get:
+      tags: ["Server"]
+      x-kinara-access: owner
+      summary: Disk use of libraries, cache and data (owners)
+      responses:
+        "200": { description: OK }
+  /metrics/usage:
+    get:
+      tags: ["Server"]
+      x-kinara-access: owner
+      summary: Watching over time (owners)
+      responses:
+        "200": { description: OK }
+  /metrics/http:
+    get:
+      tags: ["Server"]
+      x-kinara-access: owner
+      summary: Request counts and timings per route (owners)
+      responses:
+        "200": { description: 'since and routes' }
+  /metrics/logs:
+    get:
+      tags: ["Server"]
+      x-kinara-access: owner
+      summary: Recent warnings and errors (owners)
+      responses:
+        "200": { description: Log entries, newest last }
   /parties/mine:
     get:
+      tags: ["Watch parties"]
+      x-kinara-access: user
       summary: This device, its watch party (or null) and the parties inviting it.
       responses:
         "200": { description: "{me, party, invites}" }
   /parties/devices:
     get:
+      tags: ["Watch parties"]
+      x-kinara-access: user
       summary: Devices online now that can be invited to a watch party.
       responses:
         "200": { description: "[{device, name, user, label, icon}]" }
   /parties:
     post:
+      tags: ["Watch parties"]
+      x-kinara-access: user
       summary: >-
         Start a watch party around what this device is playing. Playback
         carries on as it was; `invite` lists device IDs to invite at once.
@@ -2517,6 +3367,8 @@ paths:
         "201": { description: The party }
   /parties/join:
     post:
+      tags: ["Watch parties"]
+      x-kinara-access: user
       summary: Join with a 4-letter code, or by id to accept an invite.
       requestBody:
         content:
@@ -2529,18 +3381,24 @@ paths:
         "410": { description: The party has ended }
   /parties/{id}/leave:
     post:
+      tags: ["Watch parties"]
+      x-kinara-access: user
       summary: Leave. The longest-standing member becomes host; an empty party ends.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "204": { description: Left }
   /parties/{id}/decline:
     post:
+      tags: ["Watch parties"]
+      x-kinara-access: user
       summary: Turn down an invite.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         "204": { description: Declined }
   /parties/{id}/invite:
     post:
+      tags: ["Watch parties"]
+      x-kinara-access: user
       summary: Invite devices by ID.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody:
@@ -2551,6 +3409,8 @@ paths:
         "200": { description: The party }
   /parties/{id}/control:
     post:
+      tags: ["Watch parties"]
+      x-kinara-access: user
       summary: >-
         Play, pause, seek or load (a new title) for everyone. Starts are
         scheduled a second ahead on the server clock so every device starts
@@ -2572,6 +3432,8 @@ paths:
         "200": { description: The party }
   /parties/{id}/report:
     post:
+      tags: ["Watch parties"]
+      x-kinara-access: user
       summary: A member reporting how it's doing; answers with the party.
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       requestBody:
@@ -2590,6 +3452,8 @@ paths:
         "200": { description: The party }
   /parties/{id}/wait:
     get:
+      tags: ["Watch parties"]
+      x-kinara-access: user
       summary: >-
         Long-poll: answers when the party's revision passes `rev` (200), after
         25 seconds with nothing new (204), or when the party ended (410).

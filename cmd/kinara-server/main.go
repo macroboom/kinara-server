@@ -27,7 +27,7 @@
 //	KINARA_INTROS      find TV intros for "Skip intro"
 //	KINARA_WATCH       seconds between checks of library folders for new files (default 60)
 //
-// Limits:
+// Limits (the defaults: Manage, Transcoding changes them without a restart):
 //
 //	KINARA_MAX_TRANSCODES  conversions at once (default 6 with a graphics card encoder, else 3)
 //	KINARA_HWACCEL         graphics card for converting: auto (default), nvenc, qsv,
@@ -452,6 +452,9 @@ func serveUntil(parent context.Context, args []string) error {
 			if n, err := strconv.Atoi(env("KINARA_MAX_TRANSCODES", "0")); err == nil && n > 0 {
 				srv.Transcoder.MaxJobs = n
 			}
+			// The owner's choices from Manage, Transcoding (they override
+			// KINARA_HWACCEL and KINARA_MAX_TRANSCODES).
+			srv.ApplyTranscodeSettings(ctx)
 			srv.Transcoder.Init()
 			// HLS for iPhones and Safari, written under the cache (left over
 			// sessions from a previous run are cleared first).
@@ -492,6 +495,11 @@ func serveUntil(parent context.Context, args []string) error {
 	// against the speech, in the background.
 	go srv.CheckSubtitleAccount(ctx)
 	go srv.RunAutoSubs(ctx)
+	// Approved requests to Radarr and Sonarr, and their downloads as titles
+	// on their way (arr.go).
+	go srv.RunArr(ctx)
+	// Every subtitle file's timing, checked against the speech (subtiming.go).
+	go srv.RunSubtitleTiming(ctx)
 	if secs := env("KINARA_WATCH", "60"); secs != "0" && secs != "off" {
 		every, err := strconv.Atoi(secs)
 		if err != nil || every < 10 {
@@ -837,6 +845,8 @@ func startCloud(ctx context.Context, d *deps, srv *api.Server, handler http.Hand
 		Version:    version,
 		// The owner's name for the server (Settings), else the computer's.
 		Name: srv.Name,
+		// Whether browsers may watch away from home (the cloud's watch page).
+		WebPlay: srv.WebPlay,
 	}, handler, d.log)
 	if srv.Remote != nil {
 		sc := srv.Remote

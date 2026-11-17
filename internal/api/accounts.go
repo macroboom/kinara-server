@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -278,6 +279,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u store.Use
 		return
 	}
 	st.ServerName = name
+	if st.RelayMaxKbps != 0 && (st.RelayMaxKbps < store.MinRelayKbps || st.RelayMaxKbps > store.MaxRelayKbps) {
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf("the relay cap must be between %d and %d kbit/s, or 0 for none", store.MinRelayKbps, store.MaxRelayKbps))
+		return
+	}
 	if err := s.Store.PutSettings(r.Context(), st); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -290,6 +295,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, u store.Use
 		}
 	}
 	s.name.set(name)
+	// The cloud's watch page shows whether browsers may watch: tell it now.
+	if s.Cloud != nil {
+		s.Cloud.Poke()
+	}
 	// HasHomePIN is read only here (PUT /settings/home-pin sets it).
 	if st, err = s.Store.GetSettings(r.Context()); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())

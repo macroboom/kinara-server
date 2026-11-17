@@ -126,6 +126,8 @@ func serviceMain(argc uint32, argv **uint16) uintptr {
 	done := make(chan error, 1)
 	go func() { done <- serveUntil(ctx, svc.args) }()
 	setServiceState(stateRunning, acceptStop|acceptShutdown, 0, 0)
+	// After an automatic update: the tray icons it closed.
+	go relaunchTray()
 
 	err := <-done
 	cancel()

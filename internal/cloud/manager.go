@@ -43,6 +43,9 @@ type Settings struct {
 	RelayConns int
 	Version    string
 	Name       func() string
+	// WebPlay says whether browsers may watch away from home (reported to
+	// the cloud's watch page); nil leaves it out.
+	WebPlay func() bool
 }
 
 // Iroh reports the sidecar's address for presence (nil: no sidecar).
@@ -128,6 +131,13 @@ func (m *Manager) poke() {
 	}
 }
 
+// Poke reports to the cloud now (after a setting it shows changed).
+func (m *Manager) Poke() {
+	if m != nil && m.wake != nil {
+		m.poke()
+	}
+}
+
 // State is the linked state, or nil.
 func (m *Manager) State() *State {
 	m.mu.Lock()
@@ -191,6 +201,9 @@ type LinkStatus struct {
 	LastReport time.Time `json:"lastReport,omitempty"`
 	CloudError string    `json:"cloudError,omitempty"`
 	RelayURL   string    `json:"relayUrl,omitempty"`
+	// WatchURL is the cloud's page for watching in a web browser away
+	// from home (once linked).
+	WatchURL string `json:"watchUrl,omitempty"`
 }
 
 // Status is the current picture.
@@ -206,6 +219,7 @@ func (m *Manager) Status() LinkStatus {
 		o := m.state.Owner
 		out.Owner = &o
 		out.RelayURL = "https://" + m.state.RelayHost
+		out.WatchURL = strings.TrimRight(m.S.CloudURL, "/") + "/watch"
 	}
 	if m.link != nil {
 		out.Code, out.VerifyURL, out.LinkURL, out.Expires, out.LinkError = m.link.Code, m.link.VerifyURL, m.link.Complete, m.link.Expires, m.link.Err
@@ -346,21 +360,28 @@ func (m *Manager) relaysChanged() {
 // VerifyAccess checks an app's account token for this server and returns
 // the local user it signs in as.
 func (m *Manager) VerifyAccess(token string) (int64, Owner, error) {
+	uid, owner, _, err := m.VerifyAccessFor(token)
+	return uid, owner, err
+}
+
+// VerifyAccessFor is VerifyAccess that also says whether the token is a
+// web browser's pass from the cloud's watch page.
+func (m *Manager) VerifyAccessFor(token string) (userID int64, owner Owner, web bool, err error) {
 	st := m.State()
 	if st == nil {
-		return 0, Owner{}, errors.New("this server isn't linked to a Kinara account")
+		return 0, Owner{}, false, errors.New("this server isn't linked to a Kinara account")
 	}
 	c, err := verifyAccess(token, st.CloudKey, time.Now())
 	if err != nil {
-		return 0, Owner{}, err
+		return 0, Owner{}, false, err
 	}
 	if c.Server != st.ServerID {
-		return 0, Owner{}, errors.New("that token is for another server")
+		return 0, Owner{}, false, errors.New("that token is for another server")
 	}
 	if c.Role != "owner" || c.Subject != st.Owner.ID {
-		return 0, Owner{}, errors.New("that account doesn't have access to this server")
+		return 0, Owner{}, false, errors.New("that account doesn't have access to this server")
 	}
-	return st.OwnerUserID, Owner{ID: c.Subject, Email: c.Email, Name: c.Name}, nil
+	return st.OwnerUserID, Owner{ID: c.Subject, Email: c.Email, Name: c.Name}, c.Web, nil
 }
 
 // --- presence -----------------------------------------------------------------------
@@ -396,6 +417,10 @@ func (m *Manager) report(ctx context.Context) time.Duration {
 	m.mu.Unlock()
 	if m.S.Name != nil {
 		p.Name = m.S.Name()
+	}
+	if m.S.WebPlay != nil {
+		on := m.S.WebPlay()
+		p.WebPlay = &on
 	}
 	if m.Iroh != nil {
 		p.IrohTicket, p.IrohNode = m.Iroh()

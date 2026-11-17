@@ -77,6 +77,15 @@ type Request struct {
 	// Stage is where the video work happens; set by Stream and HLS.Start
 	// as they work down the stages ("" is the first).
 	Stage Stage
+	// The owner's choices (Prefs), filled in when a conversion starts:
+	// encoder speed, tone mapping curve, AAC bitrates (0: 192k and 384k),
+	// no dialogue lift when downmixing, and zscale rather than libplacebo.
+	Speed           string
+	ToneMapCurve    string
+	StereoKbps      int
+	SurroundKbps    int
+	NoDialogueBoost bool
+	zscaleOnly      bool
 	// SourceProfile is the video's codec profile ("High 10"), for sources
 	// the graphics card can't decode.
 	SourceProfile string
@@ -121,11 +130,12 @@ type Transcoder struct {
 	// with a hardware encoder, 3 without).
 	MaxJobs int
 
-	semOnce sync.Once
-	sem     chan struct{}
-	reg     registry
-	dvOnce  sync.Once
-	dv      *dvCache
+	semMu  sync.Mutex
+	sem    chan struct{}
+	reg    registry
+	prefs  prefsBox
+	dvOnce sync.Once
+	dv     *dvCache
 
 	stageOnce sync.Once
 	stageMem  *stageMemo
@@ -134,22 +144,19 @@ type Transcoder struct {
 // ErrBusy means too many streams are being converted.
 var ErrBusy = errors.New("the server is converting as many streams as it can; try again shortly")
 
+// slots is the semaphore for conversions at once. A new limit (Prefs) makes
+// a new one: conversions holding the old one finish on it, so for a moment
+// both counts run.
 func (t *Transcoder) slots() chan struct{} {
-	t.semOnce.Do(func() {
-		n := t.MaxJobs
-		if n <= 0 {
-			n = 3
-			// A graphics card's encoder does the heavy lifting; NVIDIA's
-			// consumer cards allow 8 encodes at once, others a similar few.
-			if t.Tool != nil && hardwareEncoder(t.Tool.Caps().H264Encoder) {
-				n = 6
-			}
-		}
+	n := t.jobLimit()
+	t.semMu.Lock()
+	defer t.semMu.Unlock()
+	if t.sem == nil || cap(t.sem) != n {
 		t.sem = make(chan struct{}, n)
 		if t.Log != nil {
 			t.Log.Info("transcode slots", "max", n)
 		}
-	})
+	}
 	return t.sem
 }
 
@@ -279,7 +286,7 @@ func Args(r Request, caps ffmpeg.Caps) []string {
 		if !fresh {
 			a = append(a, "-vf", plan.vf)
 		}
-		a = append(a, videoEncoderArgs(plan.encoder, r.MaxBitrate, caps)...)
+		a = append(a, videoEncoderArgs(plan.encoder, r.MaxBitrate, caps, r.Speed)...)
 		if r.Container == "hls" {
 			// A keyframe at every segment boundary, so each segment starts
 			// cleanly and seeking lands where expected.
@@ -323,12 +330,18 @@ func Args(r Request, caps ffmpeg.Caps) []string {
 		if out > limit || (out <= 0 && asked) {
 			out = limit
 		}
-		bitrate := "192k"
-		if out > 2 {
-			bitrate = "384k"
+		kbps := 192
+		if r.StereoKbps > 0 {
+			kbps = r.StereoKbps
 		}
-		a = append(a, "-c:a", "aac", "-b:a", bitrate)
-		if out == 2 && ch > 2 {
+		if out > 2 {
+			kbps = 384
+			if r.SurroundKbps > 0 {
+				kbps = r.SurroundKbps
+			}
+		}
+		a = append(a, "-c:a", "aac", "-b:a", strconv.Itoa(kbps)+"k")
+		if out == 2 && ch > 2 && !r.NoDialogueBoost {
 			// Surround to stereo: the plain downmix leaves dialogue quiet
 			// (the centre channel is mixed in at -3 dB beside everything
 			// else), so lift it and limit the peaks instead of clipping.
@@ -412,7 +425,7 @@ func cpuFilter(r Request, caps ffmpeg.Caps, height int) string {
 	}
 	if r.HDR != "" && caps.Placebo {
 		w, h := ffmpeg.Fit(height)
-		return fmt.Sprintf("libplacebo=w=%s:h=%s:", w, h) + strings.TrimPrefix(ffmpeg.PlaceboFilter, "libplacebo=") + clean
+		return fmt.Sprintf("libplacebo=w=%s:h=%s:", w, h) + strings.TrimPrefix(placeboCurve(ffmpeg.PlaceboFilter, r.ToneMapCurve), "libplacebo=") + clean
 	}
 	fw, fh := ffmpeg.Fit(height)
 	filters := []string{fmt.Sprintf("scale=w=%s:h=%s", fw, fh)}
@@ -420,7 +433,7 @@ func cpuFilter(r Request, caps ffmpeg.Caps, height int) string {
 		if caps.SetParams {
 			filters = append(filters, ffmpeg.SourceParams(transfer))
 		}
-		filters = append(filters, ffmpeg.ToneMapFilter)
+		filters = append(filters, zscaleCurve(ffmpeg.ToneMapFilter, r.ToneMapCurve))
 	} else {
 		filters = append(filters, "format=yuv420p")
 	}
@@ -457,7 +470,8 @@ func toneMapped(r Request, caps ffmpeg.Caps) bool {
 	return caps.Placebo || (caps.ToneMap && sourceTransfer(r) != "")
 }
 
-func videoEncoderArgs(enc string, kbps int, caps ffmpeg.Caps) []string {
+func videoEncoderArgs(enc string, kbps int, caps ffmpeg.Caps, speed string) []string {
+	preset := speedPreset(enc, speed)
 	rate := strconv.Itoa(kbps) + "k"
 	buf := strconv.Itoa(kbps*2) + "k"
 	// Hardware encoders aim a little under the cap: with the average equal
@@ -468,13 +482,15 @@ func videoEncoderArgs(enc string, kbps int, caps ffmpeg.Caps) []string {
 	case "h264_nvenc":
 		// Quality over latency: this is film, not a video call. A recent
 		// NVIDIA card still runs this many times faster than real time.
-		return []string{"-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-spatial-aq", "1",
-			"-b:v", target, "-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96"}
+		a := append([]string{"-c:v", "h264_nvenc"}, preset...)
+		return append(a, "-tune", "hq", "-rc", "vbr", "-spatial-aq", "1",
+			"-b:v", target, "-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96")
 	case "h264_qsv":
 		// forced_idr: forced keyframes become IDR frames, which HLS can cut
 		// segments at (plain I-frames leave segments of 2.5 to 5 s).
-		return []string{"-c:v", "h264_qsv", "-preset", "veryfast", "-forced_idr", "1",
-			"-b:v", target, "-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96"}
+		a := append([]string{"-c:v", "h264_qsv"}, preset...)
+		return append(a, "-forced_idr", "1",
+			"-b:v", target, "-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96")
 	case "h264_vaapi":
 		// The rate control the driver accepted with a cap (checked at
 		// start): left to choose, some drivers pick a mode that ignores it.
@@ -484,14 +500,15 @@ func videoEncoderArgs(enc string, kbps int, caps ffmpeg.Caps) []string {
 		}
 		return append(a, "-b:v", target, "-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96")
 	case "h264_amf":
-		return []string{"-c:v", "h264_amf", "-quality", "speed", "-rc", "vbr_peak",
-			"-b:v", target, "-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96"}
+		a := append([]string{"-c:v", "h264_amf"}, preset...)
+		return append(a, "-rc", "vbr_peak",
+			"-b:v", target, "-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96")
 	case "h264_videotoolbox":
-		return []string{"-c:v", "h264_videotoolbox", "-realtime", "1",
-			"-b:v", target, "-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96"}
+		a := append([]string{"-c:v", "h264_videotoolbox"}, preset...)
+		return append(a, "-b:v", target, "-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96")
 	default:
-		return []string{"-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
-			"-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96"}
+		a := append([]string{"-c:v", "libx264"}, preset...)
+		return append(a, "-maxrate", rate, "-bufsize", buf, "-profile:v", "high", "-g", "96")
 	}
 }
 
@@ -502,7 +519,8 @@ func (t *Transcoder) Stream(ctx context.Context, w io.Writer, r Request) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
-	caps := t.Tool.Caps()
+	t.applyPrefs(&r)
+	caps := t.capsFor(r)
 	if !caps.Found {
 		return errors.New("ffmpeg was not found; install ffmpeg to convert files the TV can't play")
 	}

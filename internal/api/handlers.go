@@ -957,7 +957,8 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, u store.User) {
 		content = plainReader{f}
 	}
 	step("sending")
-	http.ServeContent(w, r, filepath.Base(v.Path), fi.ModTime(), content)
+	// Through the cloud relay: no faster than the owner's cap (webremote.go).
+	http.ServeContent(s.relayThrottle(w, r), r, filepath.Base(v.Path), fi.ModTime(), content)
 	step("finished")
 }
 

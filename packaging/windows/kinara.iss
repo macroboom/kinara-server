@@ -172,9 +172,14 @@ begin
   Result := WizardSilent and (ExpandConstant('{param:AUTOUPDATE|0}') = '1');
 end;
 
+// After an automatic update, in sign-in mode, the setup runs as the
+// signed-in user and starts the tray (which runs the server) itself. In
+// service mode it runs from the service in session 0, where a tray started
+// here would be invisible (and run as the service's account): it leaves a
+// note instead and the service starts the tray in each signed-in session.
 function TrayAfterAutoUpdate: Boolean;
 begin
-  Result := IsAutoUpdate and WantTrayAtSignIn;
+  Result := IsAutoUpdate and WantTrayAtSignIn and not IsServiceMode;
 end;
 
 function EnvFile: String;
@@ -690,6 +695,8 @@ begin
   begin
     LockDown(GetDataDir(''));
     SetUpService;
+    if IsAutoUpdate and WantTrayAtSignIn then
+      SaveStringToFile(GetDataDir('') + '\relaunch-tray', 'start the tray in signed-in sessions', False);
     if Run(Sys('net.exe'), 'start ' + ServiceName) <> 0 then
       MsgBox('The Kinara service was installed but did not start. The log may say why:' + #13#10 +
         GetDataDir('') + '\logs\server.log', mbError, MB_OK);

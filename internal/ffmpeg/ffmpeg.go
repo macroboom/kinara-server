@@ -26,8 +26,9 @@ type Tool struct {
 	Device string
 	Log    *slog.Logger
 
-	once sync.Once
-	caps Caps
+	mu       sync.Mutex
+	detected bool
+	caps     Caps
 }
 
 // Caps is what this ffmpeg can do.
@@ -109,9 +110,48 @@ func (t *Tool) Available() error {
 
 // Caps checks the encoders and filters once (the first call takes a few
 // seconds while hardware encoders are tried) and remembers the answer.
+// Other callers wait for that check.
 func (t *Tool) Caps() Caps {
-	t.once.Do(func() { t.caps = t.detect() })
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.detected {
+		t.caps = t.detect()
+		t.detected = true
+	}
 	return t.caps
+}
+
+// Ready returns the capabilities without waiting: ok is false while
+// they're being checked.
+func (t *Tool) Ready() (c Caps, ok bool) {
+	if !t.mu.TryLock() {
+		return Caps{}, false
+	}
+	defer t.mu.Unlock()
+	return t.caps, t.detected
+}
+
+// Choice is the graphics card backend and Linux render node asked for now.
+func (t *Tool) Choice() (hwaccel, device string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.HWAccel, t.Device
+}
+
+// Reconfigure picks another graphics card backend ("auto", "none", "nvenc",
+// ...) and render node, and checks again (in the background). Conversions
+// already running keep what they started with; new ones wait for the check.
+func (t *Tool) Reconfigure(hwaccel, device string) {
+	t.mu.Lock()
+	changed := t.HWAccel != hwaccel || t.Device != device
+	t.HWAccel, t.Device = hwaccel, device
+	if changed {
+		t.detected = false
+	}
+	t.mu.Unlock()
+	if changed {
+		go t.Caps()
+	}
 }
 
 func (t *Tool) detect() Caps {
@@ -127,7 +167,7 @@ func (t *Tool) detect() Caps {
 	HideWindow(listCmd)
 	list, _ := listCmd.Output()
 	encoders := string(list)
-	t.detectHW(ctx, encoders, &c)
+	t.detectHW(ctx, encoders, &c, t.hwChoice())
 	c.Software = strings.Contains(encoders, " libx264 ")
 	if c.H264Encoder == "" && c.Software {
 		c.H264Encoder = "libx264"

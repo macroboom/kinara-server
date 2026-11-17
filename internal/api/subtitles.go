@@ -45,7 +45,9 @@ type ExternalSubtitle struct {
 	// Provider is the service a download came from; Auto: the server
 	// found it by itself; Sync says how checking it against the speech went
 	// (synced: its timing was corrected; already: it was right; unchecked;
-	// no_match: picked by hand and it doesn't seem to line up).
+	// no_match: it doesn't seem to line up, kept as it is). "" is not
+	// checked yet: every subtitle file is checked, downloads and ones next
+	// to the video alike (subtiming.go).
 	Provider string `json:"provider,omitempty"`
 	Auto     bool   `json:"auto,omitempty"`
 	Sync     string `json:"sync,omitempty"`
@@ -101,7 +103,16 @@ func (s *Server) serveExternalVTT(w http.ResponseWriter, r *http.Request, v stor
 		return
 	}
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-	if t := subtitleTiming(f); !t.IsIdentity() {
+	t := subtitleTiming(f)
+	if check, _ := needsTimingCheck(f, timingKey(v.Mtime, fi.ModTime().Unix())); check {
+		// Not checked yet, or changed since (an edited file, a new release
+		// of the film): checked now, and the old correction isn't used.
+		s.checkTimingSoon(f.ID)
+		if f.SyncState != "" {
+			t = subsync.Timing{}
+		}
+	}
+	if !t.IsIdentity() {
 		// Lined up with the speech (autosubs.go): the file stays as it came,
 		// the correction is applied here. It can change, so no long caching.
 		vtt = subsync.RetimeVTT(vtt, t)
@@ -140,6 +151,10 @@ type SubtitleSettings struct {
 	// (autosubs.go); Budget is how many a day.
 	Auto   bool `json:"auto"`
 	Budget int  `json:"budget"`
+	// CheckTiming checks every subtitle file in the library against the
+	// speech in the background, while nobody is watching (subtiming.go).
+	// Off, only the ones played or picked are checked.
+	CheckTiming bool `json:"checkTiming"`
 	// Providers are the subtitle services, with their keys and today's use.
 	Providers []ProviderView `json:"providers"`
 }
@@ -161,6 +176,7 @@ func (s *Server) subtitleSettings(ctx context.Context) SubtitleSettings {
 	}
 	st.Available = s.subs.client != nil && s.subs.client.APIKey != ""
 	st.Auto, st.Budget = get(keyAutoSubs) != "false", s.autoSubsBudget(ctx)
+	st.CheckTiming = get(keySubsCheckTiming) != "false"
 	st.Providers = s.providerViews(ctx)
 	return st
 }
@@ -209,6 +225,8 @@ func (s *Server) putSubtitleSettings(w http.ResponseWriter, r *http.Request, u s
 		APIKey   *string `json:"apiKey"`
 		Auto     *bool   `json:"auto"`
 		Budget   *int    `json:"budget"`
+		// CheckTiming: see SubtitleSettings.
+		CheckTiming *bool `json:"checkTiming"`
 		// SubDLKey and JimakuKey are the owner's keys ("" removes one).
 		SubDLKey  *string `json:"subdlKey"`
 		JimakuKey *string `json:"jimakuKey"`
@@ -250,6 +268,14 @@ func (s *Server) putSubtitleSettings(w http.ResponseWriter, r *http.Request, u s
 	}
 	if in.Auto != nil && !set(keyAutoSubs, strconv.FormatBool(*in.Auto)) {
 		return
+	}
+	if in.CheckTiming != nil {
+		if !set(keySubsCheckTiming, strconv.FormatBool(*in.CheckTiming)) {
+			return
+		}
+		if *in.CheckTiming {
+			s.replanTiming()
+		}
 	}
 	if in.Budget != nil {
 		if *in.Budget < 0 || *in.Budget > 1000 {
@@ -563,7 +589,7 @@ func (s *Server) downloadSubtitle(w http.ResponseWriter, r *http.Request, u stor
 		return
 	}
 	s.Log.Info("subtitle downloaded", "by", u.Username, "version", v.ID, "language", f.Language, "service", req.Provider)
-	go s.syncSubtitleFile(v.ID, f.ID)
+	s.checkTimingSoon(f.ID)
 	writeJSON(w, http.StatusCreated, externalOf(v.ID, f, u))
 }
 

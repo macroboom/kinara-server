@@ -81,6 +81,15 @@ type requestView struct {
 	Device        requestDeviceView `json:"device"`
 	CreatedAt     int64             `json:"createdAt"`
 	DecidedAt     int64             `json:"decidedAt"`
+	// Arr is what came of sending it to Radarr or Sonarr (nil: not sent).
+	Arr *requestArrView `json:"arr,omitempty"`
+}
+
+// requestArrView: state is sent or error; note says what.
+type requestArrView struct {
+	State string `json:"state"`
+	Note  string `json:"note"`
+	At    int64  `json:"at"`
 }
 
 func newRequestView(r store.Request) requestView {
@@ -90,7 +99,15 @@ func newRequestView(r store.Request) requestView {
 		RequestedBy: requestUserView{ID: r.UserID, Name: r.Username},
 		Device:      requestDeviceView{ID: r.ClientID, Name: r.DeviceName, Icon: r.DeviceIcon},
 		CreatedAt:   r.CreatedAt, DecidedAt: r.DecidedAt,
+		Arr: arrViewOf(r),
 	}
+}
+
+func arrViewOf(r store.Request) *requestArrView {
+	if r.ArrState == "" {
+		return nil
+	}
+	return &requestArrView{State: r.ArrState, Note: r.ArrNote, At: r.ArrAt}
 }
 
 // requestMarker goes on titles shown outside the library (title pages,
@@ -151,6 +168,10 @@ func (s *Server) emitRequest(event string, r store.Request) {
 		data.Request.Reason = r.DeclineReason
 	}
 	s.emit(event, eventScope{UserID: r.UserID}, data)
+	if event == "request.approved" {
+		// Straight to Radarr or Sonarr, when one is set up (arr.go).
+		s.arrSendLater(r)
+	}
 }
 
 // --- Create ---

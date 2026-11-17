@@ -89,10 +89,16 @@ func (s *Server) cloudSignIn(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusTooManyRequests, err.Error())
 		return
 	}
-	userID, owner, err := s.Cloud.VerifyAccess(strings.TrimSpace(req.Token))
+	userID, owner, web, err := s.Cloud.VerifyAccessFor(strings.TrimSpace(req.Token))
 	if err != nil {
 		s.limiter.Fail(keys...)
 		writeErr(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	// A pass from the cloud's watch page: only while the owner allows
+	// watching in a browser away from home (webremote.go).
+	if web && !s.WebPlay() {
+		writeErr(w, http.StatusForbidden, "watching in a web browser away from home is turned off on this server (Manage, Remote access)")
 		return
 	}
 	u, err := s.Store.GetUser(r.Context(), userID)

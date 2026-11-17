@@ -31,8 +31,7 @@ func (t *Tool) hwChoice() string {
 // (Windows), then Apple's. The tests are what Silo and Jellyfin run; an
 // encoder only listed by ffmpeg isn't enough (it also needs the card and
 // its driver).
-func (t *Tool) detectHW(ctx context.Context, encoders string, c *Caps) {
-	choice := t.hwChoice()
+func (t *Tool) detectHW(ctx context.Context, encoders string, c *Caps, choice string) {
 	if choice == "none" || choice == "software" {
 		return
 	}
@@ -123,6 +122,31 @@ func (t *Tool) smoke(ctx context.Context, args ...string) bool {
 	return cmd.Run() == nil
 }
 
+// RenderNode is a Linux graphics card render node.
+type RenderNode struct {
+	Path string `json:"path"`
+	// Vendor is the card's maker: Intel, AMD, NVIDIA, or its PCI ID.
+	Vendor string `json:"vendor"`
+}
+
+// RenderNodes lists the Linux render nodes this process can open.
+func RenderNodes() []RenderNode {
+	var out []RenderNode
+	for _, n := range renderNodes("") {
+		v := n.vendor
+		switch v {
+		case "0x8086":
+			v = "Intel"
+		case "0x1002":
+			v = "AMD"
+		case "0x10de":
+			v = "NVIDIA"
+		}
+		out = append(out, RenderNode{Path: n.path, Vendor: v})
+	}
+	return out
+}
+
 type renderNode struct {
 	path   string
 	vendor string // PCI vendor ID: 0x8086 Intel, 0x1002 AMD, 0x10de NVIDIA
@@ -152,7 +176,59 @@ func renderNodes(dev string) []renderNode {
 // WithCaps is a Tool whose capabilities are given rather than detected
 // (tests, and checking how a conversion would run on other hardware).
 func WithCaps(binary string, c Caps) *Tool {
-	t := &Tool{Binary: binary}
-	t.once.Do(func() { t.caps = c })
-	return t
+	return &Tool{Binary: binary, detected: true, caps: c}
+}
+
+// Backend is one graphics card encoder this system might have.
+type Backend struct {
+	// ID is the KINARA_HWACCEL value: nvenc, qsv, vaapi, amf, videotoolbox.
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	// Listed: this ffmpeg was built with the encoder.
+	Listed bool `json:"listed"`
+	// Works: it encoded a test frame here (the card and its driver work).
+	Works bool `json:"works"`
+	// Device is the Linux render node it worked on.
+	Device string `json:"device,omitempty"`
+}
+
+// Backends lists the graphics card encoders for this operating system.
+func Backends() []Backend {
+	nv := Backend{ID: HWNVENC, Label: "NVIDIA (NVENC)"}
+	qsv := Backend{ID: HWQSV, Label: "Intel Quick Sync"}
+	switch runtime.GOOS {
+	case "windows":
+		return []Backend{nv, qsv, {ID: HWAMF, Label: "AMD (AMF)"}}
+	case "linux":
+		return []Backend{nv, qsv, {ID: HWVAAPI, Label: "VAAPI (Intel or AMD)"}}
+	case "darwin":
+		return []Backend{{ID: HWVideoToolbox, Label: "Apple VideoToolbox"}}
+	}
+	return nil
+}
+
+// Survey tries every graphics card encoder for this system with a test
+// frame, whatever is chosen now: what the owner can pick from. It takes a
+// few seconds per card.
+func (t *Tool) Survey(ctx context.Context) []Backend {
+	out := Backends()
+	if t.Available() != nil {
+		return out
+	}
+	listCmd := exec.CommandContext(ctx, t.Path(), "-hide_banner", "-encoders")
+	HideWindow(listCmd)
+	list, _ := listCmd.Output()
+	encoders := string(list)
+	_, device := t.Choice()
+	for i, b := range out {
+		out[i].Listed = strings.Contains(encoders, " h264_"+b.ID+" ")
+		if !out[i].Listed {
+			continue
+		}
+		probe := &Tool{Binary: t.Binary, Device: device}
+		var c Caps
+		probe.detectHW(ctx, encoders, &c, b.ID)
+		out[i].Works, out[i].Device = c.HW == b.ID, c.HWDevice
+	}
+	return out
 }

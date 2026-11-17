@@ -87,7 +87,8 @@ func (t *Transcoder) Convert(ctx context.Context, r Request, out string, progres
 	if err := r.Validate(); err != nil {
 		return err
 	}
-	caps := t.Tool.Caps()
+	t.applyPrefs(&r)
+	caps := t.capsFor(r)
 	if !caps.Found {
 		return errors.New("ffmpeg was not found")
 	}

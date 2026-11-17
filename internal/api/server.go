@@ -128,6 +128,12 @@ type Server struct {
 	opt optimizeState
 	// auto runs automatic subtitles (autosubs.go).
 	auto autoSubsState
+	// timing checks subtitle files against the speech (subtiming.go).
+	timing subTimingState
+	// tcEnv is the graphics card choice from the environment (transcoding.go).
+	tcEnv transcodeEnv
+	// arr reads Radarr's and Sonarr's queues (arr.go).
+	arr arrState
 
 	limiter *auth.Limiter
 	// tunnelLimiter counts failed sign-ins from all remote devices
@@ -251,6 +257,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/v1/cloud/link", s.admin(s.cloudCancelLink))
 	mux.Handle("POST /api/v1/cloud/unlink", s.admin(s.cloudUnlink))
 	mux.Handle("GET /api/v1/playback/advice", s.user(s.playbackAdvice))
+	mux.Handle("GET /api/v1/connection", s.user(s.connection))
+	mux.Handle("GET /api/v1/settings/transcoding", s.admin(s.getTranscoding))
+	mux.Handle("PUT /api/v1/settings/transcoding", s.admin(s.putTranscoding))
+	mux.Handle("POST /api/v1/settings/transcoding/test", s.admin(s.testEncoders))
 	mux.Handle("GET /api/v1/playback", s.admin(s.nowPlayingList))
 	mux.HandleFunc("GET /api/v1/time", s.serverTime)
 	mux.Handle("GET /api/v1/parties/mine", s.user(s.partyMine))
@@ -282,6 +292,7 @@ func (s *Server) Handler() http.Handler {
 	// Integrations (webhooks, incoming hooks, API keys) and requests.
 	s.integrationRoutes(mux)
 	s.requestRoutes(mux)
+	s.arrRoutes(mux)
 	s.updateRoutes(mux)
 	s.backupRoutes(mux)
 	s.subtitleRoutes(mux)

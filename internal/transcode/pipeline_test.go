@@ -67,11 +67,11 @@ func TestPlanVideoBackends(t *testing.T) {
 	if p = planVideo(cpu, vaapi); p.encoder != "libx264" || len(p.input) != 0 || strings.Contains(p.vf, "hwupload") {
 		t.Errorf("cpu: %+v", p)
 	}
-	a := videoEncoderArgs("h264_vaapi", 4000, vaapi)
+	a := videoEncoderArgs("h264_vaapi", 4000, vaapi, "")
 	if !has(a, "-rc_mode", "CBR", "-b:v", "3600k", "-maxrate", "4000k") {
 		t.Errorf("vaapi encoder %v", a)
 	}
-	if a := videoEncoderArgs("h264_qsv", 4000, vaapi); !has(a, "-forced_idr", "1") {
+	if a := videoEncoderArgs("h264_qsv", 4000, vaapi, ""); !has(a, "-forced_idr", "1") {
 		t.Errorf("qsv encoder %v", a)
 	}
 
@@ -145,7 +145,7 @@ func TestHDRToCardTagsInChain(t *testing.T) {
 	if a = Args(r, vaapi); !has(a, ffmpeg.SDROutputArgs...) {
 		t.Errorf("cpu stage keeps output tags: %v", a)
 	}
-	if a := videoEncoderArgs("h264_vaapi", 4000, ffmpeg.Caps{}); indexOf(a, "-rc_mode") >= 0 {
+	if a := videoEncoderArgs("h264_vaapi", 4000, ffmpeg.Caps{}, ""); indexOf(a, "-rc_mode") >= 0 {
 		t.Errorf("no mode known: %v", a)
 	}
 }

@@ -59,7 +59,8 @@ var (
 // pipeline.go).
 func (h *HLS) Start(ctx context.Context, r Request) (string, error) {
 	t := h.T
-	caps := t.Tool.Caps()
+	t.applyPrefs(&r)
+	caps := t.capsFor(r)
 	if !caps.Found {
 		return "", errors.New("ffmpeg was not found; install ffmpeg to convert files this device can't play")
 	}

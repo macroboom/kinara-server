@@ -544,6 +544,9 @@ func (s *Server) transcodeRequest(r *http.Request) (transcode.Request, store.Ver
 			break
 		}
 	}
+	// The owner's limits (transcoding.go), then the relay's cap (webremote.go).
+	s.qualityLimits(r, &req, v)
+	clampToCap(&req, s.relayCap(r), v.Bitrate)
 	if req.Container != "hls" {
 		if err := req.Validate(); err != nil {
 			return req, v, http.StatusBadRequest, err

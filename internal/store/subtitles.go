@@ -32,6 +32,9 @@ type SubtitleFile struct {
 	TimingScale    float64 `json:"-"`
 	TimingOffsetMS int     `json:"-"`
 	SyncState      string  `json:"syncState,omitempty"`
+	// SyncKey is what the check was made against (the video's and the
+	// subtitle's modification times); "" for one checked before it was kept.
+	SyncKey string `json:"-"`
 }
 
 // Subtitle file sources.
@@ -41,13 +44,13 @@ const (
 )
 
 const subtitleCols = `id, version_id, path, language, title, format, forced, hearing_impaired, source, provider_id, COALESCE(added_by, 0), added_at,
-	provider, auto, timing_scale, timing_offset_ms, sync_state`
+	provider, auto, timing_scale, timing_offset_ms, sync_state, sync_key`
 
 func scanSubtitle(sc interface{ Scan(...any) error }) (SubtitleFile, error) {
 	var f SubtitleFile
 	var forced, hi, auto int
 	err := sc.Scan(&f.ID, &f.VersionID, &f.Path, &f.Language, &f.Title, &f.Format, &forced, &hi, &f.Source, &f.ProviderID, &f.AddedBy, &f.AddedAt,
-		&f.Provider, &auto, &f.TimingScale, &f.TimingOffsetMS, &f.SyncState)
+		&f.Provider, &auto, &f.TimingScale, &f.TimingOffsetMS, &f.SyncState, &f.SyncKey)
 	f.Forced, f.HearingImpaired, f.Auto = forced != 0, hi != 0, auto != 0
 	return f, err
 }
@@ -92,16 +95,16 @@ func (s *Store) AddSubtitleFile(ctx context.Context, f *SubtitleFile) error {
 	}
 	err := s.db.QueryRowContext(ctx, `INSERT INTO subtitle_files
 		(version_id, path, language, title, format, forced, hearing_impaired, source, provider_id, added_by, added_at,
-		 provider, auto, timing_scale, timing_offset_ms, sync_state)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 provider, auto, timing_scale, timing_offset_ms, sync_state, sync_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (version_id, path) DO UPDATE SET language = excluded.language, title = excluded.title,
 			format = excluded.format, forced = excluded.forced, hearing_impaired = excluded.hearing_impaired,
 			source = excluded.source, provider_id = excluded.provider_id, provider = excluded.provider,
 			auto = excluded.auto, timing_scale = excluded.timing_scale, timing_offset_ms = excluded.timing_offset_ms,
-			sync_state = excluded.sync_state
+			sync_state = excluded.sync_state, sync_key = excluded.sync_key
 		RETURNING id`,
 		f.VersionID, f.Path, f.Language, f.Title, f.Format, boolInt(f.Forced), boolInt(f.HearingImpaired), f.Source, f.ProviderID, by, f.AddedAt,
-		f.Provider, boolInt(f.Auto), f.TimingScale, f.TimingOffsetMS, f.SyncState).Scan(&f.ID)
+		f.Provider, boolInt(f.Auto), f.TimingScale, f.TimingOffsetMS, f.SyncState, f.SyncKey).Scan(&f.ID)
 	return err
 }
 
@@ -150,10 +153,18 @@ func (s *Store) SyncSidecars(ctx context.Context, versionID string, found []Subt
 	return changed, nil
 }
 
-// SetSubtitleTiming saves a subtitle file's timing correction and how the
-// check went.
-func (s *Store) SetSubtitleTiming(ctx context.Context, id int64, scale float64, offsetMS int, state string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE subtitle_files SET timing_scale = ?, timing_offset_ms = ?, sync_state = ? WHERE id = ?`, scale, offsetMS, state, id)
+// SetSubtitleTiming saves a subtitle file's timing correction, how the
+// check went, and what it was made against (key; "" leaves it as it is).
+func (s *Store) SetSubtitleTiming(ctx context.Context, id int64, scale float64, offsetMS int, state, key string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE subtitle_files SET timing_scale = ?, timing_offset_ms = ?, sync_state = ?,
+		sync_key = CASE WHEN ? = '' THEN sync_key ELSE ? END WHERE id = ?`, scale, offsetMS, state, key, key, id)
+	return err
+}
+
+// SetSubtitleSyncKey records what a subtitle file's earlier check counts
+// as made against, without checking it again.
+func (s *Store) SetSubtitleSyncKey(ctx context.Context, id int64, key string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE subtitle_files SET sync_key = ? WHERE id = ?`, key, id)
 	return err
 }
 

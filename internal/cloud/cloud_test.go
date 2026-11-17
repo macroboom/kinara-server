@@ -51,6 +51,16 @@ func TestVerifyAccess(t *testing.T) {
 			t.Errorf("%s accepted", name)
 		}
 	}
+	if _, _, web, err := m.VerifyAccessFor(sign(key, good)); err != nil || web {
+		t.Errorf("app token: web %v, %v", web, err)
+	}
+	pass := map[string]any{"web": true}
+	for k, v := range good {
+		pass[k] = v
+	}
+	if _, _, web, err := m.VerifyAccessFor(sign(key, pass)); err != nil || !web {
+		t.Errorf("watch page pass: web %v, %v", web, err)
+	}
 	m.state = nil
 	if _, _, err := m.VerifyAccess(sign(key, good)); err == nil {
 		t.Error("accepted while unlinked")

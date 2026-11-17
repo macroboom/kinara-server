@@ -50,6 +50,11 @@ type Request struct {
 	DevicePlatform string
 	CreatedAt      int64
 	DecidedAt      int64
+	// ArrState is what came of sending it to Radarr or Sonarr: "" (not
+	// sent), "sent" or "error"; ArrNote says what, ArrAt when.
+	ArrState string
+	ArrNote  string
+	ArrAt    int64
 }
 
 // Open reports whether a request still waits for the title: pending or
@@ -84,7 +89,8 @@ func parseSeasons(key string) []int {
 
 const requestCols = `r.id, r.kind, r.tmdb_id, r.tvdb_id, r.imdb_id, r.title, r.year, r.poster_path, r.mode, r.seasons,
 	r.status, r.auto, r.note, r.decline_reason, r.user_id, COALESCE(u.username, ''),
-	r.client_id, COALESCE(NULLIF(c.name, ''), r.device_name), r.device_icon, r.device_platform, r.created_at, r.decided_at`
+	r.client_id, COALESCE(NULLIF(c.name, ''), r.device_name), r.device_icon, r.device_platform, r.created_at, r.decided_at,
+	r.arr_state, r.arr_note, r.arr_at`
 
 // requestFrom joins what a request view needs: the requester's name and the
 // device's current name (the owner may have renamed it).
@@ -96,7 +102,8 @@ func scanRequest(row scanner) (Request, error) {
 	var auto int
 	err := row.Scan(&r.ID, &r.Kind, &r.TMDBID, &r.TVDBID, &r.IMDBID, &r.Title, &r.Year, &r.PosterPath, &r.Mode, &seasons,
 		&r.Status, &auto, &r.Note, &r.DeclineReason, &r.UserID, &r.Username,
-		&r.ClientID, &r.DeviceName, &r.DeviceIcon, &r.DevicePlatform, &r.CreatedAt, &r.DecidedAt)
+		&r.ClientID, &r.DeviceName, &r.DeviceIcon, &r.DevicePlatform, &r.CreatedAt, &r.DecidedAt,
+		&r.ArrState, &r.ArrNote, &r.ArrAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, ErrNotFound
 	}
@@ -249,6 +256,15 @@ func (s *Store) SetRequestStatus(ctx context.Context, id int64, status, reason s
 	}
 	s.requestsChanged()
 	return nil
+}
+
+// SetRequestArr records what came of sending a request to Radarr or Sonarr.
+func (s *Store) SetRequestArr(ctx context.Context, id int64, state, note string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE requests SET arr_state = ?, arr_note = ?, arr_at = ? WHERE id = ?`, state, note, now(), id)
+	if err == nil {
+		s.requestsChanged()
+	}
+	return err
 }
 
 // DeleteRequest removes a request.

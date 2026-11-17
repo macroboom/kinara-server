@@ -71,6 +71,7 @@ var (
 	pShellExecute          = shell32.NewProc("ShellExecuteW")
 	pGetModuleHandle       = kernel32.NewProc("GetModuleHandleW")
 	pCreateMutex           = kernel32.NewProc("CreateMutexW")
+	pProcessIdToSessionId  = kernel32.NewProc("ProcessIdToSessionId")
 	pRegGetValue           = advapi32.NewProc("RegGetValueW")
 	pOpenSCManager         = advapi32.NewProc("OpenSCManagerW")
 	pOpenService           = advapi32.NewProc("OpenServiceW")
@@ -239,6 +240,13 @@ func main() {
 		return
 	}
 	open := len(os.Args) > 1 && os.Args[1] == "--open"
+	// Session 0 is where services run: nobody sees an icon there, and older
+	// installers started the tray there after an automatic update (as the
+	// service's account). The service now starts it in each signed-in
+	// session instead.
+	if inServiceSession() {
+		return
+	}
 	name, _ := syscall.UTF16PtrFromString(`Local\KinaraTray`)
 	_, _, err := pCreateMutex.Call(0, 0, uintptr(unsafe.Pointer(name)))
 	already := err == syscall.Errno(errAlreadyExists)
@@ -257,7 +265,9 @@ func main() {
 		alert("Kinara could not start its tray icon: " + err.Error())
 		return
 	}
-	addIcon()
+	if !addIcon() {
+		go retryIcon()
+	}
 	if app.mode == "signin" {
 		app.wanted.Store(true)
 		startChild()
@@ -338,13 +348,41 @@ func iconData() notifyIconData {
 	return d
 }
 
-func addIcon() {
+// addIcon puts the icon in the notification area. It fails when Explorer
+// isn't ready yet, which is common right after signing in.
+func addIcon() bool {
 	d := iconData()
 	d.Flags = nifMsg | nifIcon | nifTip
 	d.CallbackMessage = wmTray
 	d.Icon = app.icon
 	copyUTF16(d.Tip[:], tipText())
-	pShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&d)))
+	r, _, _ := pShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&d)))
+	if r != 0 {
+		return true
+	}
+	// Already there (Explorer answered late to an earlier try): fine.
+	d.Flags = nifTip
+	r, _, _ = pShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&d)))
+	return r != 0
+}
+
+// retryIcon keeps trying for a few minutes, for a tray started before
+// Explorer's notification area was up. "TaskbarCreated" covers Explorer
+// starting later, but not one that was slow to answer.
+func retryIcon() {
+	for i := 0; i < 90; i++ {
+		time.Sleep(2 * time.Second)
+		if addIcon() {
+			return
+		}
+	}
+}
+
+// inServiceSession: running in session 0, where no one signs in.
+func inServiceSession() bool {
+	var id uint32
+	r, _, _ := pProcessIdToSessionId.Call(uintptr(os.Getpid()), uintptr(unsafe.Pointer(&id)))
+	return r != 0 && id == 0
 }
 
 func removeIcon() {
