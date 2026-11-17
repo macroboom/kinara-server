@@ -147,7 +147,7 @@ func (s *Store) ItemsInList(ctx context.Context, profileID, listID int64) ([]Ite
 	if err != nil {
 		return nil, err
 	}
-	return scanItems(rows)
+	return scanItems(ctx, rows)
 }
 
 // AddToList puts a movie or show on one of the profile's lists (again is fine).

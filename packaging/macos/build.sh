@@ -230,14 +230,29 @@ install -m 0644 LICENSE "$app/LICENSE"
 
 # --- Signing ------------------------------------------------------------------------------
 
+# stamped runs a signing command that asks Apple's timestamp server for a
+# secure timestamp, trying again when the server doesn't answer ("A
+# timestamp was expected but was not found"). That server drops requests now
+# and then, more often from CI, and notarization needs the timestamp, so
+# signing without one isn't an option.
+stamped() {
+  attempt=1
+  while ! "$@"; do
+    [ "$attempt" -ge 5 ] && die "signing failed 5 times (Apple's timestamp server may be down; try again later)"
+    printf 'warning: signing failed (attempt %s of 5), trying again in %ss\n' "$attempt" $((attempt * 10)) >&2
+    sleep $((attempt * 10))
+    attempt=$((attempt + 1))
+  done
+}
+
 if [ "${UNSIGNED:-}" != 1 ]; then
   step "signing (Developer ID, hardened runtime)"
   for f in ffmpeg/ffmpeg ffmpeg/ffprobe kinara-iroh kinara-server; do
     id="media.kinara.$(basename "$f")"
-    codesign --force --options runtime --timestamp --identifier "$id" --sign "$SIGN_APP" "$app/$f"
+    stamped codesign --force --options runtime --timestamp --identifier "$id" --sign "$SIGN_APP" "$app/$f"
     codesign --verify --strict "$app/$f"
   done
-  codesign --force --options runtime --timestamp --sign "$SIGN_APP" "$bundle"
+  stamped codesign --force --options runtime --timestamp --sign "$SIGN_APP" "$bundle"
   codesign --verify --deep --strict "$bundle"
 fi
 
@@ -260,7 +275,7 @@ if [ "${UNSIGNED:-}" = 1 ]; then
   productbuild --distribution "$work/distribution.xml" --resources "$here/resources" \
     --package-path "$work" "$pkg"
 else
-  productbuild --distribution "$work/distribution.xml" --resources "$here/resources" \
+  stamped productbuild --distribution "$work/distribution.xml" --resources "$here/resources" \
     --package-path "$work" --sign "$SIGN_INSTALLER" --timestamp "$pkg"
 fi
 

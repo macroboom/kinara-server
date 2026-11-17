@@ -21,7 +21,7 @@ func scanItem(r scanner) (Item, error) {
 	return it, err
 }
 
-func scanItems(rows *sql.Rows) ([]Item, error) {
+func scanItems(ctx context.Context, rows *sql.Rows) ([]Item, error) {
 	defer rows.Close()
 	var out []Item
 	for rows.Next() {
@@ -29,7 +29,9 @@ func scanItems(rows *sql.Rows) ([]Item, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, it)
+		if CanSeeLibrary(ctx, it.LibraryID) {
+			out = append(out, it)
+		}
 	}
 	return out, rows.Err()
 }
@@ -52,8 +54,8 @@ func (s *Store) CreateItem(ctx context.Context, it *Item) error {
 
 func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
 	it, err := scanItem(s.db.QueryRowContext(ctx, qGetItem, id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return it, ErrNotFound
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !CanSeeLibrary(ctx, it.LibraryID)) {
+		return Item{}, ErrNotFound
 	}
 	return it, err
 }
@@ -92,7 +94,7 @@ func (s *Store) Children(ctx context.Context, parentID string) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanItems(rows)
+	return scanItems(ctx, rows)
 }
 
 func (s *Store) PendingMatch(ctx context.Context, libraryID int64) ([]Item, error) {
@@ -100,7 +102,7 @@ func (s *Store) PendingMatch(ctx context.Context, libraryID int64) ([]Item, erro
 	if err != nil {
 		return nil, err
 	}
-	return scanItems(rows)
+	return scanItems(ctx, rows)
 }
 
 func (s *Store) UnmatchedItems(ctx context.Context, libraryID int64) ([]Item, error) {
@@ -108,7 +110,7 @@ func (s *Store) UnmatchedItems(ctx context.Context, libraryID int64) ([]Item, er
 	if err != nil {
 		return nil, err
 	}
-	return scanItems(rows)
+	return scanItems(ctx, rows)
 }
 
 // UpdateItemMetadata saves title, overview, rating and match fields.
@@ -152,6 +154,9 @@ func (s *Store) SetImage(ctx context.Context, itemID, kind, url string) error {
 
 // ImageURL returns the source URL for an item's image, or "" if none.
 func (s *Store) ImageURL(ctx context.Context, itemID, kind string) (string, error) {
+	if !s.ItemVisible(ctx, itemID) {
+		return "", nil
+	}
 	return s.findID(ctx, qGetImage, itemID, kind)
 }
 
@@ -212,12 +217,13 @@ func (s *Store) ShowOfEpisode(ctx context.Context, episodeID string) (string, er
 
 // ListItems browses items with filters, sorting, and paging.
 func (s *Store) ListItems(ctx context.Context, f ItemFilter) ([]Item, error) {
+	f.scope = scopeSQL(ctx, "i.library_id")
 	q, args := buildListItems(f)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
-	return scanItems(rows)
+	return scanItems(ctx, rows)
 }
 
 func buildListItems(f ItemFilter) (string, []any) {
@@ -291,6 +297,9 @@ const unmatchedSQL = `(i.kind IN ('movie', 'show') AND i.match_state = 'unmatche
 func itemWhere(f ItemFilter) ([]string, []any) {
 	var where []string
 	var args []any
+	if f.scope != "" {
+		where = append(where, f.scope)
+	}
 	if f.LibraryID != 0 {
 		where = append(where, "i.library_id = ?")
 		args = append(args, f.LibraryID)
@@ -360,6 +369,7 @@ func escapeLike(s string) string {
 // LetterOffsets says where each letter starts in the A to Z listing for a
 // filter, for the jump bar. Titles starting with a digit or symbol are "#".
 func (s *Store) LetterOffsets(ctx context.Context, f ItemFilter) ([]LetterOffset, error) {
+	f.scope = scopeSQL(ctx, "i.library_id")
 	var q string
 	var args []any
 	if grouping(f) {
@@ -465,7 +475,7 @@ func mergeTx(ctx context.Context, tx *sql.Tx, fromID, intoID string) error {
 	if err != nil {
 		return err
 	}
-	children, err := scanItems(rows)
+	children, err := scanItems(ctx, rows)
 	if err != nil {
 		return err
 	}

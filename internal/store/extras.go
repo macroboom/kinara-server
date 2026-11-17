@@ -119,7 +119,7 @@ func (s *Store) Genres(ctx context.Context, itemIDs []string) (map[string][]stri
 // limits it to movies or shows ("" for both).
 func (s *Store) GenreCounts(ctx context.Context, kind string) ([]GenreCount, error) {
 	q := `SELECT g.genre, COUNT(*) FROM item_genres g JOIN items i ON i.id = g.item_id
-		WHERE ` + availableSQL
+		WHERE ` + availableSQL + ` AND ` + scopeSQL(ctx, "i.library_id")
 	var args []any
 	if kind != "" {
 		q += ` AND i.kind = ?`
@@ -155,7 +155,7 @@ func (s *Store) ItemsByExternalIDs(ctx context.Context, provider string, values 
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT e.value, `+itemColsI+` FROM external_ids e
 		JOIN items i ON i.id = e.item_id
-		WHERE e.provider = ? AND e.value IN (`+placeholders(len(values))+`) AND `+availableSQL, args...)
+		WHERE e.provider = ? AND e.value IN (`+placeholders(len(values))+`) AND `+availableSQL+` AND `+scopeSQL(ctx, "i.library_id"), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -366,7 +366,7 @@ func (s *Store) AllVersions(ctx context.Context) ([]Version, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanVersions(rows)
+	return scanVersions(ctx, rows)
 }
 
 // ThumbTarget is an "Other videos" file whose title has no picture yet.

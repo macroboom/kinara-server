@@ -228,4 +228,8 @@ type ItemFilter struct {
 	// listing (they're left out of libraries and Home rows by default and
 	// shown on the Other tab instead).
 	IncludeUnmatched bool
+
+	// scope keeps to the request's libraries (set from the context by
+	// ListItems and LetterOffsets).
+	scope string
 }

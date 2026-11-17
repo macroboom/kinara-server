@@ -111,6 +111,9 @@ func (s *Store) Credits(ctx context.Context, itemID string) ([]Credit, error) {
 // CreditPhoto returns the source URL of a cast member's photo ("" if none).
 func (s *Store) CreditPhoto(ctx context.Context, itemID string, order int) (string, error) {
 	var url string
+	if !s.ItemVisible(ctx, itemID) {
+		return "", nil
+	}
 	err := s.db.QueryRowContext(ctx, qCreditPhoto, itemID, order).Scan(&url)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil

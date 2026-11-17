@@ -138,6 +138,11 @@ func (s *Server) uiPage(h userHandler, adminOnly bool) http.HandlerFunc {
 			http.Error(w, "admin only", http.StatusForbidden)
 			return
 		}
+		r, err := s.withScope(r, a.user)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		if a.user.HomeOnly {
 			a.user.IsAdmin = false
 		}
@@ -173,6 +178,11 @@ func (s *Server) uiHome(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.lookup(r, false)
 	if !ok {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	r, err = s.withScope(r, a.user)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	libs, err := s.libraryViews(r)

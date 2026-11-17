@@ -143,19 +143,49 @@ func accountErr(w http.ResponseWriter, err error) {
 
 // --- Owner: accounts and settings ---
 
+// userView is an account as the owner's Accounts page sees it.
+type userView struct {
+	store.User
+	// Libraries says which libraries it can see.
+	Libraries store.LibraryAccess `json:"libraries"`
+}
+
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request, u store.User) {
 	users, err := s.Store.ListUsers(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, users)
+	out := make([]userView, 0, len(users))
+	for _, x := range users {
+		acc, err := s.Store.UserLibraries(r.Context(), x.ID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out = append(out, userView{User: x, Libraries: acc})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 type userRequest struct {
 	Username string  `json:"username"`
 	Password *string `json:"password"`
 	IsAdmin  *bool   `json:"isAdmin"`
+	// Libraries sets which libraries the account can see (all when left
+	// out of a new account).
+	Libraries *store.LibraryAccess `json:"libraries"`
+}
+
+// setLibraries saves an account's library access from a request.
+func (s *Server) setLibraries(r *http.Request, id int64, acc *store.LibraryAccess) error {
+	if acc == nil {
+		return nil
+	}
+	if acc.All {
+		acc.Libraries = nil
+	}
+	return s.Store.SetUserLibraries(r.Context(), id, *acc)
 }
 
 func (s *Server) createUserHandler(w http.ResponseWriter, r *http.Request, u store.User) {
@@ -178,7 +208,12 @@ func (s *Server) createUserHandler(w http.ResponseWriter, r *http.Request, u sto
 		accountErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, nu)
+	if err := s.setLibraries(r, nu.ID, req.Libraries); err != nil {
+		accountErr(w, err)
+		return
+	}
+	acc, _ := s.Store.UserLibraries(r.Context(), nu.ID)
+	writeJSON(w, http.StatusCreated, userView{User: nu, Libraries: acc})
 }
 
 func userID(r *http.Request) (int64, bool) {
@@ -231,6 +266,10 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request, u store.User
 			accountErr(w, err)
 			return
 		}
+	}
+	if err := s.setLibraries(r, id, req.Libraries); err != nil {
+		accountErr(w, err)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

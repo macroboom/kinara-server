@@ -16,7 +16,7 @@ func scanVersion(r scanner) (Version, error) {
 	return v, err
 }
 
-func scanVersions(rows *sql.Rows) ([]Version, error) {
+func scanVersions(ctx context.Context, rows *sql.Rows) ([]Version, error) {
 	defer rows.Close()
 	var out []Version
 	for rows.Next() {
@@ -24,15 +24,17 @@ func scanVersions(rows *sql.Rows) ([]Version, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, v)
+		if CanSeeLibrary(ctx, v.LibraryID) {
+			out = append(out, v)
+		}
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) GetVersion(ctx context.Context, id string) (Version, error) {
 	v, err := scanVersion(s.db.QueryRowContext(ctx, qGetVersion, id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return v, ErrNotFound
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !CanSeeLibrary(ctx, v.LibraryID)) {
+		return Version{}, ErrNotFound
 	}
 	return v, err
 }
@@ -40,8 +42,8 @@ func (s *Store) GetVersion(ctx context.Context, id string) (Version, error) {
 // VersionByPath returns the version for an absolute path, or ErrNotFound.
 func (s *Store) VersionByPath(ctx context.Context, path string) (Version, error) {
 	v, err := scanVersion(s.db.QueryRowContext(ctx, qGetVersionByPath, path))
-	if errors.Is(err, sql.ErrNoRows) {
-		return v, ErrNotFound
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !CanSeeLibrary(ctx, v.LibraryID)) {
+		return Version{}, ErrNotFound
 	}
 	return v, err
 }
@@ -53,7 +55,7 @@ func (s *Store) LibraryVersions(ctx context.Context, libraryID int64) (map[strin
 	if err != nil {
 		return nil, err
 	}
-	list, err := scanVersions(rows)
+	list, err := scanVersions(ctx, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +133,7 @@ func (s *Store) VersionsForItem(ctx context.Context, itemID string) ([]Version, 
 	if err != nil {
 		return nil, err
 	}
-	return scanVersions(rows)
+	return scanVersions(ctx, rows)
 }
 
 func (s *Store) ProbeErrors(ctx context.Context, libraryID int64, limit int) ([]Version, error) {
@@ -139,7 +141,7 @@ func (s *Store) ProbeErrors(ctx context.Context, libraryID int64, limit int) ([]
 	if err != nil {
 		return nil, err
 	}
-	return scanVersions(rows)
+	return scanVersions(ctx, rows)
 }
 
 func (s *Store) UnlinkedVersions(ctx context.Context, libraryID int64, limit int) ([]Version, error) {
@@ -147,7 +149,7 @@ func (s *Store) UnlinkedVersions(ctx context.Context, libraryID int64, limit int
 	if err != nil {
 		return nil, err
 	}
-	return scanVersions(rows)
+	return scanVersions(ctx, rows)
 }
 
 // SaveVersion inserts or updates a version and replaces its streams.

@@ -143,7 +143,7 @@ func (s *Store) ItemExternalIDs(ctx context.Context, itemID string) (map[string]
 // FindTitle finds a movie or show in the library by its title (any case)
 // and, when year is not 0, its year. "" when there is none.
 func (s *Store) FindTitle(ctx context.Context, kind, title string, year int) (Item, error) {
-	q := `SELECT ` + itemColsI + ` FROM items i WHERE i.kind = ? AND lower(i.title) = lower(?)`
+	q := `SELECT ` + itemColsI + ` FROM items i WHERE i.kind = ? AND lower(i.title) = lower(?) AND ` + scopeSQL(ctx, "i.library_id")
 	args := []any{kind, strings.TrimSpace(title)}
 	if year > 0 {
 		q += ` AND i.year = ?`

@@ -54,7 +54,9 @@ func (s *Store) ListLibraries(ctx context.Context) ([]Library, error) {
 			rows.Close()
 			return nil, err
 		}
-		out = append(out, l)
+		if CanSeeLibrary(ctx, l.ID) {
+			out = append(out, l)
+		}
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -88,6 +90,9 @@ func (s *Store) ListLibraries(ctx context.Context) ([]Library, error) {
 
 func (s *Store) GetLibrary(ctx context.Context, id int64) (Library, error) {
 	var l Library
+	if !CanSeeLibrary(ctx, id) {
+		return l, ErrNotFound
+	}
 	err := s.db.QueryRowContext(ctx, qGetLibrary, id).
 		Scan(&l.ID, &l.Name, &l.Path, &l.Kind, &l.CreatedAt, &l.LastScanAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -134,8 +139,11 @@ func (s *Store) libraryFolders(ctx context.Context, q querier, id int64) ([]stri
 }
 
 func (s *Store) DeleteLibrary(ctx context.Context, id int64) error {
-	// The cascade covers this too; explicit so it holds without foreign keys.
+	// The cascade covers these too; explicit so they hold without foreign keys.
 	if _, err := s.db.ExecContext(ctx, qDeleteLibFolders, id); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM user_libraries WHERE library_id = ?`, id); err != nil {
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, qDeleteLibrary, id)

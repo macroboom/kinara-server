@@ -425,6 +425,11 @@ func (s *Server) authenticate(h userHandler, adminOnly, allowQuery bool) http.Ha
 				"sign in with the owner's password or Kinara account to manage the server")
 			return
 		}
+		r, err := s.withScope(r, a.user)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		// Handlers that do more for owners (everyone's requests,
 		// downloads, subtitles) treat a home sign-in as anyone else's.
 		if a.user.HomeOnly {
@@ -433,6 +438,23 @@ func (s *Server) authenticate(h userHandler, adminOnly, allowQuery bool) http.Ha
 		r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, a))
 		h(w, r, a.user)
 	})
+}
+
+// withScope limits r to the libraries u was shared, when it isn't all of
+// them. Every handler then sees only those: the store keeps to the scope on
+// the context. Every way of signing in goes through here.
+func (s *Server) withScope(r *http.Request, u store.User) (*http.Request, error) {
+	if u.IsAdmin {
+		return r, nil
+	}
+	acc, err := s.Store.UserLibraries(r.Context(), u.ID)
+	if err != nil {
+		return r, err
+	}
+	if acc.All {
+		return r, nil
+	}
+	return r.WithContext(store.WithLibraries(r.Context(), acc.Libraries)), nil
 }
 
 func sessionFrom(r *http.Request) authed {

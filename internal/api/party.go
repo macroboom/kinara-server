@@ -164,6 +164,10 @@ func (s *Server) partyCreate(w http.ResponseWriter, r *http.Request, u store.Use
 		writeErr(w, http.StatusBadRequest, "a watch party needs a title to watch")
 		return
 	}
+	if !s.Store.ItemVisible(r.Context(), req.ItemID) {
+		writeErr(w, http.StatusNotFound, "item not found")
+		return
+	}
 	me := s.partyDevice(r, u)
 	p := s.parties().Create(me, req.ItemID, strings.TrimSpace(req.Title), req.Position, req.Playing)
 	if len(req.Invite) > 0 {

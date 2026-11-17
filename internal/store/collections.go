@@ -113,6 +113,15 @@ func (s *Store) GetCollection(ctx context.Context, id int) (Collection, error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
+	// A franchise is seen only through a movie of it one can see.
+	if err == nil && Scoped(ctx) {
+		var n int
+		s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM item_collections ic JOIN items i ON i.id = ic.item_id
+			WHERE ic.collection_id = ? AND `+scopeSQL(ctx, "i.library_id"), id).Scan(&n)
+		if n == 0 {
+			return Collection{}, ErrNotFound
+		}
+	}
 	return c, err
 }
 
@@ -132,7 +141,7 @@ func (s *Store) CollectionMovies(ctx context.Context, id int) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanItems(rows)
+	return scanItems(ctx, rows)
 }
 
 // CollectionOf is the franchise a movie belongs to (0 when none).
@@ -158,7 +167,7 @@ func (s *Store) CollectionSizes(ctx context.Context, ids []int) (map[int]int, er
 	}
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT ic.collection_id, COUNT(*) FROM item_collections ic
 		JOIN items i ON i.id = ic.item_id
-		WHERE ic.collection_id IN (%s) AND i.kind = 'movie' AND %s GROUP BY ic.collection_id`, ph, availableSQL), args...)
+		WHERE ic.collection_id IN (%s) AND i.kind = 'movie' AND %s AND %s GROUP BY ic.collection_id`, ph, availableSQL, scopeSQL(ctx, "i.library_id")), args...)
 	if err != nil {
 		return nil, err
 	}

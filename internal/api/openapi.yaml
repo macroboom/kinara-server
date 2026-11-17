@@ -297,6 +297,14 @@ components:
         createdAt: { type: integer, description: Unix seconds }
         profileId: { type: integer, description: Who's watching on this device }
         homeOnly: { type: boolean, description: Signed in on the home network without a password (POST /auth/home) }
+    LibraryAccess:
+      type: object
+      description: >
+        Which libraries an account can see. An account that can't see a library gets 404 for
+        everything in it, exactly as if it didn't exist, on every route.
+      properties:
+        all: { type: boolean, description: Every library, including ones added later (owners always) }
+        libraries: { type: array, items: { type: integer }, description: The libraries it can see when all is false }
     WatchState:
       type: object
       properties:
@@ -2141,6 +2149,7 @@ paths:
       tags: ["Sign-in and accounts"]
       x-kinara-access: owner
       summary: Every account (owners only)
+      description: Each account also carries libraries (LibraryAccess).
       responses:
         "200": { description: OK }
     post:
@@ -2156,6 +2165,7 @@ paths:
                 username: { type: string }
                 password: { type: string }
                 isAdmin: { type: boolean }
+                libraries: { $ref: "#/components/schemas/LibraryAccess", description: "Left out: every library" }
       responses:
         "201": { description: The new account }
         "409": { description: Name taken }
@@ -2166,7 +2176,16 @@ paths:
     patch:
       tags: ["Sign-in and accounts"]
       x-kinara-access: owner
-      summary: Set a new password (signs the account out everywhere) or change owner rights
+      summary: Set a new password (signs the account out everywhere), change owner rights or the libraries it can see
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password: { type: string }
+                isAdmin: { type: boolean }
+                libraries: { $ref: "#/components/schemas/LibraryAccess" }
       responses:
         "204": { description: Saved }
         "409": { description: That would leave the server without an owner }
