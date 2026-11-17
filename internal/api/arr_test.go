@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,8 @@ type fakeRadarr struct {
 	added   []map[string]any
 	queue   []map[string]any
 	hasFile bool
+	// movie is what GET movie?tmdbId= finds (nil: none).
+	movie map[string]any
 }
 
 func (f *fakeRadarr) handler(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +52,12 @@ func (f *fakeRadarr) handler(w http.ResponseWriter, r *http.Request) {
 	case p == "tag":
 		send([]any{})
 	case p == "movie" && r.Method == "GET":
+		if f.movie != nil && r.URL.Query().Get("tmdbId") == fmt.Sprint(f.movie["tmdbId"]) {
+			send([]any{f.movie})
+			return
+		}
+		send([]any{})
+	case p == "history/movie":
 		send([]any{})
 	case p == "movie/lookup/tmdb":
 		send(map[string]any{"title": "Far Shore", "year": 2026, "tmdbId": 3})
@@ -138,6 +147,19 @@ func TestRequestsToRadarr(t *testing.T) {
 	statuses, _ := st.Statuses(ctx, true)
 	if len(statuses) != 1 || statuses[0].TMDBID != 3 || statuses[0].State != stateQueued {
 		t.Fatalf("searching: %+v", statuses)
+	}
+
+	// Nothing in the queue: Radarr says why, in the request's own words.
+	soon := time.Now().AddDate(0, 0, 20)
+	radarr.mu.Lock()
+	radarr.movie = map[string]any{"id": 31, "tmdbId": 3, "monitored": true, "isAvailable": false, "minimumAvailability": "released",
+		"inCinemas": time.Now().AddDate(0, 0, -10).Format(time.RFC3339), "digitalRelease": soon.Format(time.RFC3339), "added": time.Now().Format(time.RFC3339)}
+	radarr.mu.Unlock()
+	a, _ := st.GetArrSettings(ctx)
+	srv.arrExplain(ctx, a, nil)
+	statuses, _ = st.Statuses(ctx, true)
+	if len(statuses) != 1 || statuses[0].Message != "In cinemas now; out on digital "+shortDate(soon, time.Now()) || statuses[0].State != stateQueued {
+		t.Fatalf("explained: %+v", statuses)
 	}
 
 	// Downloading: one status with its progress, the searching one gone.

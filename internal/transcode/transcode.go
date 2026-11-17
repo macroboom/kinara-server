@@ -47,7 +47,10 @@ type Request struct {
 	// Audio is the source stream index of the audio track to keep (-1 for
 	// the first audio track).
 	Audio int
-	// AudioCodec is "copy" or "aac".
+	// AudioCodec is "copy", "aac", or lossless "alac" or "flac": for a
+	// player that can't decode the source (TrueHD, DTS-HD on Apple TV) but
+	// plays lossless PCM up to 7.1, so nothing is lost on the way to the
+	// receiver. Lossless needs Matroska, MP4 or fMP4 HLS (not TS segments).
 	AudioCodec string
 	// AudioChannels is the source track's channel count, if known.
 	AudioChannels int
@@ -176,9 +179,9 @@ func (r *Request) Validate() error {
 		return errors.New(`video must be "copy" or "h264"`)
 	}
 	switch r.AudioCodec {
-	case "copy", "aac":
+	case "copy", "aac", "alac", "flac":
 	default:
-		return errors.New(`audio codec must be "copy" or "aac"`)
+		return errors.New(`audio codec must be "copy", "aac", "alac" or "flac"`)
 	}
 	switch r.Container {
 	case "":
@@ -201,6 +204,9 @@ func (r *Request) Validate() error {
 	case "fmp4", "ts":
 	default:
 		return errors.New(`segments must be "fmp4" or "ts"`)
+	}
+	if lossless(r.AudioCodec) && r.Container == "hls" && r.Segments == "ts" {
+		return errors.New("lossless audio needs fMP4 segments, not TS")
 	}
 	if r.MaxAudioChannels < 0 || r.MaxAudioChannels > 8 {
 		return errors.New("audio channels must be 1 to 8")
@@ -354,6 +360,39 @@ func Args(r Request, caps ffmpeg.Caps) []string {
 			if out > 0 && out != ch {
 				a = append(a, "-ac", strconv.Itoa(out))
 			}
+		}
+	} else if lossless(r.AudioCodec) {
+		// Decoded and stored losslessly: the receiver gets exactly what it
+		// would have decoded itself, as PCM, up to 7.1 (8 channels).
+		ch := r.AudioChannels
+		limit := r.MaxAudioChannels
+		if limit <= 0 || limit > 8 {
+			limit = 8
+		}
+		out := ch
+		if out > limit || (out <= 0 && r.MaxAudioChannels > 0) {
+			out = limit
+		}
+		codec := r.AudioCodec
+		// ALAC has no 7.1 layout (only "7.1 wide", with front-centre pairs
+		// instead of side speakers): ffmpeg would drop a channel. More
+		// than 6 channels go out as FLAC, which Apple players play too.
+		if codec == "alac" && (out > 6 || (out <= 0 && ch > 6) || ch <= 0) {
+			codec = "flac"
+		}
+		a = append(a, "-c:a", codec)
+		if codec == "alac" {
+			// 24-bit sources stay 24-bit (ALAC takes them in 32-bit samples).
+			a = append(a, "-sample_fmt", "s32p")
+		}
+		if codec == "flac" && mp4 {
+			// FLAC in MP4 is still marked experimental in ffmpeg. This also
+			// covers the Dolby Vision tag's "unofficial" (it comes last).
+			a = append(a, "-strict", "experimental")
+		}
+		a = append(a, "-af", "aresample=async=1")
+		if out > 0 && out != ch {
+			a = append(a, "-ac", strconv.Itoa(out))
 		}
 	} else {
 		a = append(a, "-c:a", "copy")
@@ -866,3 +905,6 @@ func (s *statsSplitter) last() string {
 	}
 	return s.stat
 }
+
+// lossless: an audio codec that keeps every sample ("alac", "flac").
+func lossless(codec string) bool { return codec == "alac" || codec == "flac" }

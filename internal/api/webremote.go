@@ -69,6 +69,10 @@ func clampToCap(req *transcode.Request, capKbps int, sourceBitrate int64) {
 	if req.Video == "copy" && (sourceBitrate <= 0 || sourceBitrate/1000 > int64(capKbps)) {
 		req.Video = "h264"
 	}
+	// Lossless 7.1 alone can take several Mbit/s: under a cap it's AAC.
+	if req.AudioCodec == "alac" || req.AudioCodec == "flac" {
+		req.AudioCodec = "aac"
+	}
 }
 
 // connectionView is how this browser or app reaches the server.

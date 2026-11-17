@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -138,7 +139,12 @@ func TestDownloadStack(t *testing.T) {
 		t.Fatal("peer port changed")
 	}
 	a, _ := st.GetArrSettings(ctx)
-	if a.Stack == nil || made.Name != "kinara-stack.sh" || !strings.Contains(made.Compose, "RADARR__AUTH__APIKEY="+a.Stack.RadarrKey) {
+	// The script is for the server's own system: PowerShell on Windows.
+	script := "kinara-stack.sh"
+	if runtime.GOOS == "windows" {
+		script = "kinara-stack.ps1"
+	}
+	if a.Stack == nil || made.Name != script || !strings.Contains(made.Compose, "RADARR__AUTH__APIKEY="+a.Stack.RadarrKey) {
 		t.Fatalf("made: %+v", made)
 	}
 	// Made again: the same keys, so running containers still match.

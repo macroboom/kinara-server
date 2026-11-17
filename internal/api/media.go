@@ -34,7 +34,7 @@ import (
 //	maxBitrate  kbit/s for re-encoded video
 //	maxHeight   pixels for re-encoded video
 //	audio       source stream index of the audio track
-//	audioCodec  copy | aac
+//	audioCodec  copy | aac | alac | flac (lossless, up to 7.1; not over TS HLS)
 func (s *Server) transcodeStream(w http.ResponseWriter, r *http.Request, u store.User) {
 	if s.Transcoder == nil {
 		writeErr(w, http.StatusNotImplemented, "converting is turned off on this server")

@@ -45,6 +45,9 @@ type arrState struct {
 	indexers    int
 	qbitVersion string
 	kick        chan struct{}
+	// explained is when each waiting title was last looked at (see
+	// arr_explain.go).
+	explained map[string]time.Time
 }
 
 // arrSeen is a download reported last time: what to ask when it's gone.
@@ -650,6 +653,12 @@ func (s *Server) arrReadQueues(ctx context.Context) {
 		}
 	}
 	s.readHelpers(ctx, a)
+	// Titles with a download in the queue need no explaining.
+	queued := map[string]bool{}
+	for _, seen := range now {
+		queued[seen.upd.Kind+strconv.Itoa(seen.upd.TMDBID)] = true
+	}
+	defer s.arrExplain(ctx, a, queued)
 
 	for ident, seen := range now {
 		src := arrSource(seen.kind)
